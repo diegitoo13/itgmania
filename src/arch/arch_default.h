@@ -23,8 +23,11 @@ inline const std::vector<std::string>& GetDefaultMovieDriverList() {
 }
 
 inline const std::vector<std::string>& GetDefaultSoundDriverList() {
+  // ASIO takes exclusive control of the audio device, so it is deliberately
+  // not first: it is selected explicitly via the SoundDrivers preference or
+  // when the shared drivers are unusable.
   static const std::vector<std::string> soundDriverList = {
-      "DirectSound-sw", "WASAPI", "WaveOut", "WDMKS", "Null"};
+      "DirectSound-sw", "WASAPI", "ASIO", "WaveOut", "WDMKS", "Null"};
   return soundDriverList;
 }
 
