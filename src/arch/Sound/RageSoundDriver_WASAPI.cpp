@@ -16,10 +16,20 @@
 
 REGISTER_SOUND_DRIVER_CLASS2("WASAPI", WASAPI);
 
+/* When true (default), WASAPI prefers exclusive mode for the lowest output
+ * latency, bypassing the Windows audio engine. Set to 0 to stay in shared
+ * mode: the engine mixes the game with the rest of the desktop, so system
+ * capture (OBS desktop audio, NDI Screen Capture, ...) can hear it. The
+ * low-latency shared path (IAudioClient3) is still used when available. */
+static Preference<bool> g_bWASAPIExclusive("WASAPIExclusive", true);
+
 RageSoundDriver_WASAPI::RageSoundDriver_WASAPI()
     : m_iSampleRate(0),
+      m_iChannels(2),
       m_iBufferSizeFrames(0),
       m_bFloat(true),
+      m_bExclusive(false),
+      m_bLowLatencyShared(false),
       m_pAudioClient(nullptr),
       m_pRenderClient(nullptr),
       m_pAudioClock(nullptr),
@@ -66,6 +76,69 @@ void RageSoundDriver_WASAPI::FreeWASAPI() {
   }
 }
 
+namespace {
+
+// We can only mix into 32-bit float or 16-bit PCM.
+bool IsSupportedWaveFormat(const WAVEFORMATEX* pwfx, bool& bFloatOut) {
+  if (pwfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+    const WAVEFORMATEXTENSIBLE* pEx =
+        reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(pwfx);
+    if (pEx->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) {
+      bFloatOut = true;
+      return true;
+    }
+    if (pEx->SubFormat == KSDATAFORMAT_SUBTYPE_PCM &&
+        pEx->Format.wBitsPerSample == 16) {
+      bFloatOut = false;
+      return true;
+    }
+    return false;
+  }
+  if (pwfx->wFormatTag == WAVE_FORMAT_IEEE_FLOAT &&
+      pwfx->wBitsPerSample == 32) {
+    bFloatOut = true;
+    return true;
+  }
+  if (pwfx->wFormatTag == WAVE_FORMAT_PCM && pwfx->wBitsPerSample == 16) {
+    bFloatOut = false;
+    return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+HRESULT RageSoundDriver_WASAPI::TryInitialize(
+    int iShareMode, WAVEFORMATEX* pwfx, long long hnsDuration) {
+  const AUDCLNT_SHAREMODE shareMode =
+      static_cast<AUDCLNT_SHAREMODE>(iShareMode);
+  // In exclusive mode with event-driven buffering, the period must equal
+  // the buffer duration.
+  const REFERENCE_TIME hnsPeriodicity =
+      shareMode == AUDCLNT_SHAREMODE_EXCLUSIVE ? hnsDuration : 0;
+  HRESULT hr = m_pAudioClient->Initialize(
+      shareMode, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsDuration,
+      hnsPeriodicity, pwfx, nullptr);
+  if (hr == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED) {
+    // The driver rejected our buffer size; ask for the required alignment
+    // and retry once with it.
+    UINT32 iRequiredFrames = 0;
+    HRESULT hr2 = m_pAudioClient->GetBufferSize(&iRequiredFrames);
+    if (SUCCEEDED(hr2) && iRequiredFrames > 0) {
+      REFERENCE_TIME hnsAligned =
+          ((REFERENCE_TIME)iRequiredFrames * 10000000LL +
+           pwfx->nSamplesPerSec - 1) /
+          pwfx->nSamplesPerSec;
+      const REFERENCE_TIME hnsAlignedPeriodicity =
+          shareMode == AUDCLNT_SHAREMODE_EXCLUSIVE ? hnsAligned : 0;
+      hr = m_pAudioClient->Initialize(
+          shareMode, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsAligned,
+          hnsAlignedPeriodicity, pwfx, nullptr);
+    }
+  }
+  return hr;
+}
+
 bool RageSoundDriver_WASAPI::InitWASAPI(std::string& sError) {
   HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
@@ -110,48 +183,221 @@ bool RageSoundDriver_WASAPI::InitWASAPI(std::string& sError) {
     return false;
   }
 
-  m_iSampleRate = pwfx->nSamplesPerSec;
+  REFERENCE_TIME hnsDefaultPeriod = 0, hnsMinimumPeriod = 0;
+  m_pAudioClient->GetDevicePeriod(&hnsDefaultPeriod, &hnsMinimumPeriod);
+
   int iChannels = pwfx->nChannels;
+  const REFERENCE_TIME aDurations[] = {
+      hnsMinimumPeriod, hnsMinimumPeriod * 2, hnsMinimumPeriod * 3,
+      hnsDefaultPeriod};
 
-  if (pwfx->wFormatTag != WAVE_FORMAT_EXTENSIBLE) {
-    sError = ssprintf("Unsupported format tag: %d", pwfx->wFormatTag);
-    CoTaskMemFree(pwfx);
-    FreeWASAPI();
-    return false;
-  }
-
-  WAVEFORMATEXTENSIBLE* pEx = (WAVEFORMATEXTENSIBLE*)pwfx;
-  if (pEx->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) {
-    m_bFloat = true;
-  } else if (
-      pEx->SubFormat == KSDATAFORMAT_SUBTYPE_PCM &&
-      pEx->Format.wBitsPerSample == 16) {
-    m_bFloat = false;
+  // Prefer exclusive mode: it bypasses the Windows audio engine entirely
+  // and can run at the device's minimum period, which is several times
+  // lower latency than shared mode. Skipped entirely when the user asked
+  // for shared mode (WASAPIExclusive=0) so system capture can hear the game.
+  const bool bTryExclusive = g_bWASAPIExclusive.Get();
+  bool bFormatFloat = true;
+  if (!bTryExclusive) {
+    LOG->Info(
+        "WASAPI: exclusive mode disabled by preference (WASAPIExclusive=0)");
+  } else if (IsSupportedWaveFormat(pwfx, bFormatFloat)) {
+    for (REFERENCE_TIME hnsDur : aDurations) {
+      if (hnsDur <= 0) {
+        continue;
+      }
+      HRESULT hrEx = TryInitialize(AUDCLNT_SHAREMODE_EXCLUSIVE, pwfx, hnsDur);
+      if (SUCCEEDED(hrEx)) {
+        m_bExclusive = true;
+        m_bFloat = bFormatFloat;
+        m_iSampleRate = pwfx->nSamplesPerSec;
+        iChannels = pwfx->nChannels;
+        break;
+      }
+      LOG->Info(
+          "WASAPI: exclusive init with mix format (%d ch, %d Hz) at "
+          "%.2f ms failed: %s",
+          pwfx->nChannels, pwfx->nSamplesPerSec, hnsDur / 10000.0,
+          hr_ssprintf(hrEx, "Initialize failed").c_str());
+    }
   } else {
-    sError = "Unsupported format (expected float or 16-bit PCM)";
-    CoTaskMemFree(pwfx);
-    FreeWASAPI();
-    return false;
+    LOG->Info(
+        "WASAPI: mix format not mixable (tag %d, %d bits), skipping "
+        "exclusive attempt with it",
+        pwfx->wFormatTag, pwfx->wBitsPerSample);
   }
 
-  REFERENCE_TIME hnsRequestedDuration = 0;
-  if (PREFSMAN->m_iSoundWriteAhead) {
-    // WriteAhead is in frames. Convert to 100-nanosecond units.
-    hnsRequestedDuration = (REFERENCE_TIME)PREFSMAN->m_iSoundWriteAhead *
-                           10000000ULL / m_iSampleRate;
+  if (!m_bExclusive && bTryExclusive) {
+    // The mix format was rejected in exclusive mode. Probe raw formats,
+    // keeping the device's channel count: interface drivers usually only
+    // accept their native channel layout in exclusive mode.
+    const int iMixChannels = pwfx->nChannels;
+    const struct {
+      int iRate;
+      bool bFloat;
+      int iChannels;
+    } aCandidates[] = {
+        {48000, true, iMixChannels},  {48000, false, iMixChannels},
+        {48000, false, 2},            {48000, true, 2},
+        {44100, true, iMixChannels},  {44100, false, iMixChannels},
+        {44100, false, 2},            {44100, true, 2},
+    };
+    for (const auto& candidate : aCandidates) {
+      WAVEFORMATEXTENSIBLE fmt = {};
+      fmt.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+      fmt.Format.nChannels = (WORD)candidate.iChannels;
+      fmt.Format.nSamplesPerSec = candidate.iRate;
+      fmt.Format.wBitsPerSample = candidate.bFloat ? 32 : 16;
+      fmt.Format.nBlockAlign =
+          fmt.Format.nChannels * fmt.Format.wBitsPerSample / 8;
+      fmt.Format.nAvgBytesPerSec = candidate.iRate * fmt.Format.nBlockAlign;
+      fmt.Format.cbSize = 22;
+      fmt.Samples.wValidBitsPerSample = fmt.Format.wBitsPerSample;
+      fmt.dwChannelMask =
+          candidate.iChannels > 2
+              ? (SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT |
+                 SPEAKER_FRONT_CENTER | SPEAKER_LOW_FREQUENCY |
+                 SPEAKER_BACK_LEFT | SPEAKER_BACK_RIGHT |
+                 SPEAKER_SIDE_LEFT | SPEAKER_SIDE_RIGHT)
+              : (SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT);
+      fmt.SubFormat = candidate.bFloat ? KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
+                                       : KSDATAFORMAT_SUBTYPE_PCM;
+
+      WAVEFORMATEX* pUse = reinterpret_cast<WAVEFORMATEX*>(&fmt);
+      WAVEFORMATEX* pClosest = nullptr;
+      HRESULT hrSupport = m_pAudioClient->IsFormatSupported(
+          AUDCLNT_SHAREMODE_EXCLUSIVE, pUse, &pClosest);
+      bool bOwnsFormat = false;
+      if (hrSupport == S_FALSE && pClosest != nullptr) {
+        pUse = pClosest;
+        bOwnsFormat = true;
+      } else if (hrSupport != S_OK) {
+        LOG->Info(
+            "WASAPI: exclusive %d ch %d Hz %s rejected by "
+            "IsFormatSupported: %s",
+            candidate.iChannels, candidate.iRate,
+            candidate.bFloat ? "Float" : "Int16",
+            hr_ssprintf(hrSupport, "not supported").c_str());
+        if (pClosest != nullptr) {
+          CoTaskMemFree(pClosest);
+        }
+        continue;
+      }
+
+      bool bCandidateFloat = candidate.bFloat;
+      bool bUsable = IsSupportedWaveFormat(pUse, bCandidateFloat);
+      if (bUsable) {
+        for (REFERENCE_TIME hnsDur : aDurations) {
+          if (hnsDur <= 0) {
+            continue;
+          }
+          HRESULT hrEx =
+              TryInitialize(AUDCLNT_SHAREMODE_EXCLUSIVE, pUse, hnsDur);
+          if (SUCCEEDED(hrEx)) {
+            m_bExclusive = true;
+            m_bFloat = bCandidateFloat;
+            m_iSampleRate = pUse->nSamplesPerSec;
+            iChannels = pUse->nChannels;
+            break;
+          }
+          LOG->Info(
+              "WASAPI: exclusive init with %d ch %d Hz %s at %.2f ms "
+              "failed: %s",
+              pUse->nChannels, pUse->nSamplesPerSec,
+              bCandidateFloat ? "Float" : "Int16", hnsDur / 10000.0,
+              hr_ssprintf(hrEx, "Initialize failed").c_str());
+        }
+      } else {
+        LOG->Info(
+            "WASAPI: %d ch %d Hz %s candidate not usable for mixing, "
+            "skipped",
+            pUse->nChannels, pUse->nSamplesPerSec,
+            candidate.bFloat ? "Float" : "Int16");
+      }
+      if (bOwnsFormat) {
+        CoTaskMemFree(pUse);
+      }
+      if (m_bExclusive) {
+        break;
+      }
+    }
   }
 
-  hr = m_pAudioClient->Initialize(
-      AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-      hnsRequestedDuration, 0, pwfx, nullptr);
+  if (!m_bExclusive) {
+    // Exclusive mode failed. Next best: IAudioClient3 low-latency shared
+    // mode, which lets the audio engine run with much smaller periods
+    // than the classic shared-mode default when the driver supports it.
+    IAudioClient3* pClient3 = nullptr;
+    HRESULT hr3 = m_pAudioClient->QueryInterface(
+        __uuidof(IAudioClient3), (void**)&pClient3);
+    if (SUCCEEDED(hr3) && pClient3 != nullptr) {
+      UINT32 iDefaultPeriod = 0, iFundamentalPeriod = 0, iMinPeriod = 0,
+             iMaxPeriod = 0;
+      hr3 = pClient3->GetSharedModeEnginePeriod(
+          pwfx, &iDefaultPeriod, &iFundamentalPeriod, &iMinPeriod,
+          &iMaxPeriod);
+      if (SUCCEEDED(hr3)) {
+        LOG->Info(
+            "WASAPI: engine periods (frames): default %d, fundamental %d, "
+            "min %d, max %d",
+            iDefaultPeriod, iFundamentalPeriod, iMinPeriod, iMaxPeriod);
+        if (!IsSupportedWaveFormat(pwfx, bFormatFloat)) {
+          sError = "Unsupported mix format (expected float or 16-bit PCM)";
+          pClient3->Release();
+          CoTaskMemFree(pwfx);
+          FreeWASAPI();
+          return false;
+        }
+        hr3 = pClient3->InitializeSharedAudioStream(
+            AUDCLNT_STREAMFLAGS_EVENTCALLBACK, iMinPeriod, pwfx, nullptr);
+        if (SUCCEEDED(hr3)) {
+          m_bLowLatencyShared = true;
+          m_bFloat = bFormatFloat;
+          m_iSampleRate = pwfx->nSamplesPerSec;
+          iChannels = pwfx->nChannels;
+        } else {
+          LOG->Info(
+              "WASAPI: InitializeSharedAudioStream at %d frames failed: %s",
+              iMinPeriod,
+              hr_ssprintf(hr3, "InitializeSharedAudioStream failed")
+                  .c_str());
+        }
+      } else {
+        LOG->Info(
+            "WASAPI: GetSharedModeEnginePeriod failed: %s",
+            hr_ssprintf(hr3, "GetSharedModeEnginePeriod failed").c_str());
+      }
+      pClient3->Release();
+    }
+  }
 
+  if (!m_bExclusive && !m_bLowLatencyShared) {
+    // Shared-mode fallback (original behavior).
+    if (!IsSupportedWaveFormat(pwfx, bFormatFloat)) {
+      sError = "Unsupported mix format (expected float or 16-bit PCM)";
+      CoTaskMemFree(pwfx);
+      FreeWASAPI();
+      return false;
+    }
+    m_bFloat = bFormatFloat;
+    m_iSampleRate = pwfx->nSamplesPerSec;
+    iChannels = pwfx->nChannels;
+
+    REFERENCE_TIME hnsRequestedDuration = 0;
+    if (PREFSMAN->m_iSoundWriteAhead) {
+      // WriteAhead is in frames. Convert to 100-nanosecond units.
+      hnsRequestedDuration = (REFERENCE_TIME)PREFSMAN->m_iSoundWriteAhead *
+                             10000000ULL / m_iSampleRate;
+    }
+
+    hr = TryInitialize(AUDCLNT_SHAREMODE_SHARED, pwfx, hnsRequestedDuration);
+    if (FAILED(hr)) {
+      sError = hr_ssprintf(hr, "Initialize(IAudioClient) failed");
+      CoTaskMemFree(pwfx);
+      FreeWASAPI();
+      return false;
+    }
+  }
   CoTaskMemFree(pwfx);
-
-  if (FAILED(hr)) {
-    sError = hr_ssprintf(hr, "Initialize(IAudioClient) failed");
-    FreeWASAPI();
-    return false;
-  }
 
   m_hAudioEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
   if (m_hAudioEvent == NULL) {
@@ -195,10 +441,27 @@ bool RageSoundDriver_WASAPI::InitWASAPI(std::string& sError) {
     return false;
   }
 
+  REFERENCE_TIME hnsStreamLatency = 0;
+  m_pAudioClient->GetStreamLatency(&hnsStreamLatency);
+
+  m_iChannels = iChannels;
+  if (m_iChannels > 2) {
+    // We mix stereo internally; allocate scratch buffers to expand into
+    // the device's channel layout.
+    m_MixScratchFloat.resize(m_iBufferSizeFrames * 2, 0.0f);
+    m_MixScratchInt.resize(m_iBufferSizeFrames * 2, 0);
+  }
+
   LOG->Info(
-      "WASAPI: Shared mode, %d channels, %d Hz, %s, buffer size %d frames",
+      "WASAPI: %s mode, %d channels, %d Hz, %s, buffer size %d frames "
+      "(%.2f ms), device period min %.2f ms default %.2f ms, stream "
+      "latency %.2f ms",
+      m_bExclusive ? "Exclusive"
+                   : (m_bLowLatencyShared ? "Low-latency shared" : "Shared"),
       iChannels, m_iSampleRate, m_bFloat ? "Float" : "Int16",
-      m_iBufferSizeFrames);
+      m_iBufferSizeFrames, 1000.0 * m_iBufferSizeFrames / m_iSampleRate,
+      hnsMinimumPeriod / 10000.0, hnsDefaultPeriod / 10000.0,
+      hnsStreamLatency / 10000.0);
 
   return true;
 }
@@ -210,8 +473,15 @@ std::string RageSoundDriver_WASAPI::Init() {
   }
 
   // Set decode buffer size.
-  // We want it to be at least as big as the WASAPI buffer.
-  SetDecodeBufferSize(m_iBufferSizeFrames * 3 / 2);
+  // We want it to be at least as big as the WASAPI buffer, but keep a
+  // healthy floor: with a tiny exclusive-mode buffer the default size
+  // would be only a few milliseconds and the decode thread could starve
+  // the mixer.
+  int iDecodeBuffer = m_iBufferSizeFrames * 3 / 2;
+  if (iDecodeBuffer < 8192) {
+    iDecodeBuffer = 8192;
+  }
+  SetDecodeBufferSize(iDecodeBuffer);
   StartDecodeThread();
 
   m_MixingThread.SetName("WASAPI Mixer Thread");
@@ -239,6 +509,15 @@ void RageSoundDriver_WASAPI::MixerThread() {
   if (FAILED(hr)) {
     LOG->Warn(hr_ssprintf(hr, "Failed to start IAudioClient").c_str());
     return;
+  }
+
+  {
+    REFERENCE_TIME hnsLatency = 0;
+    if (SUCCEEDED(m_pAudioClient->GetStreamLatency(&hnsLatency))) {
+      LOG->Info(
+          "WASAPI: stream started, measured output latency %.2f ms",
+          hnsLatency / 10000.0);
+    }
   }
 
   int64_t iHardwareFrame = 0;  // Total frames played/mixed so far
@@ -278,11 +557,39 @@ void RageSoundDriver_WASAPI::MixerThread() {
 
     int64_t iCurrentFrame = GetPosition();
 
-    if (m_bFloat) {
-      this->Mix((float*)pData, framesAvailable, iHardwareFrame, iCurrentFrame);
+    if (m_iChannels == 2) {
+      if (m_bFloat) {
+        this->Mix(
+            (float*)pData, framesAvailable, iHardwareFrame, iCurrentFrame);
+      } else {
+        this->Mix(
+            (int16_t*)pData, framesAvailable, iHardwareFrame, iCurrentFrame);
+      }
     } else {
-      this->Mix(
-          (int16_t*)pData, framesAvailable, iHardwareFrame, iCurrentFrame);
+      // The device runs with more than 2 channels (e.g. an audio
+      // interface exposing 8 channels). Mix stereo into scratch, then
+      // expand: stereo goes to channels 1-2, all other channels silent.
+      if (m_bFloat) {
+        this->Mix(
+            m_MixScratchFloat.data(), framesAvailable, iHardwareFrame,
+            iCurrentFrame);
+        float* pOut = (float*)pData;
+        memset(pOut, 0, framesAvailable * m_iChannels * sizeof(float));
+        for (UINT32 f = 0; f < framesAvailable; ++f) {
+          pOut[f * m_iChannels + 0] = m_MixScratchFloat[f * 2 + 0];
+          pOut[f * m_iChannels + 1] = m_MixScratchFloat[f * 2 + 1];
+        }
+      } else {
+        this->Mix(
+            m_MixScratchInt.data(), framesAvailable, iHardwareFrame,
+            iCurrentFrame);
+        int16_t* pOut = (int16_t*)pData;
+        memset(pOut, 0, framesAvailable * m_iChannels * sizeof(int16_t));
+        for (UINT32 f = 0; f < framesAvailable; ++f) {
+          pOut[f * m_iChannels + 0] = m_MixScratchInt[f * 2 + 0];
+          pOut[f * m_iChannels + 1] = m_MixScratchInt[f * 2 + 1];
+        }
+      }
     }
 
     hr = m_pRenderClient->ReleaseBuffer(framesAvailable, 0);

@@ -3,9 +3,11 @@
 
 // clang-format off
 #include <windows.h>
+#include <mmreg.h>
 // clang-format on
 
 #include <atomic>
+#include <vector>
 
 #include "RageSoundDriver.h"
 #include "RageThreads.h"
@@ -29,8 +31,16 @@ class RageSoundDriver_WASAPI : public RageSoundDriver {
 
  private:
   int m_iSampleRate;
+  int m_iChannels;
   UINT32 m_iBufferSizeFrames;
   bool m_bFloat;  // true if we are using float, false if 16-bit PCM
+  bool m_bExclusive;  // true if using exclusive-mode WASAPI
+  bool m_bLowLatencyShared;  // true if using IAudioClient3 small periods
+
+  // Scratch stereo buffer used when the device runs with more than 2
+  // channels: we mix stereo, then expand into the device buffer.
+  std::vector<float> m_MixScratchFloat;
+  std::vector<int16_t> m_MixScratchInt;
 
   IAudioClient* m_pAudioClient;
   IAudioRenderClient* m_pRenderClient;
@@ -47,6 +57,8 @@ class RageSoundDriver_WASAPI : public RageSoundDriver {
   RageThread m_MixingThread;
 
   bool InitWASAPI(std::string& sError);
+  HRESULT TryInitialize(int iShareMode, WAVEFORMATEX* pwfx,
+                        long long hnsDuration);
   void FreeWASAPI();
 };
 
