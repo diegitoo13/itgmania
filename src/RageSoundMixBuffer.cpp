@@ -43,12 +43,27 @@ void RageSoundMixBuffer::write(
   }
 }
 
+/* Soft limiter for the final mix. On dense/loud sections the summed mix can
+ * exceed full scale; a hard clamp at +-1 crackles, so saturate smoothly
+ * instead: linear below |0.8|, tanh knee bending toward +-1 above it.
+ * Applied here, at the single post-mix boundary, so every backend (and the
+ * stream-audio tap) receives identical data. */
+static float SoftClipMix(float s) {
+  if (s > 0.8f) {
+    return 0.8f + 0.2f * tanhf((s - 0.8f) * 5.0f);
+  }
+  if (s < -0.8f) {
+    return -0.8f + 0.2f * tanhf((s + 0.8f) * 5.0f);
+  }
+  return s;
+}
+
 void RageSoundMixBuffer::read(int16_t* pBuf) {
   for (unsigned iPos = 0; iPos < m_pMixbuf.size(); ++iPos) {
     // do the read
     float iOut = m_pMixbuf[iPos];
-    // ensure volume is within expected levels to prevent clipping
-    iOut = std::clamp(iOut, -1.0f, +1.0f);
+    // keep the mix within bounds; saturate smoothly to avoid clamp crackle
+    iOut = SoftClipMix(iOut);
     // round rather than truncate to minimize distortion
     pBuf[iPos] = static_cast<int16_t>(std::round(iOut * INT16_MAX));
   }
@@ -56,10 +71,8 @@ void RageSoundMixBuffer::read(int16_t* pBuf) {
 }
 
 void RageSoundMixBuffer::read(float* pBuf) {
-  // ensure volume is within expected levels to prevent clipping
-  std::transform(m_pMixbuf.begin(), m_pMixbuf.end(), pBuf, [](float s) {
-    return std::clamp(s, -1.0f, +1.0f);
-  });
+  // keep the mix within bounds; saturate smoothly to avoid clamp crackle
+  std::transform(m_pMixbuf.begin(), m_pMixbuf.end(), pBuf, SoftClipMix);
   m_pMixbuf.clear();
 }
 
