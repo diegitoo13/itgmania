@@ -1,6 +1,7 @@
 #include "RageSoundDriver.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -45,16 +46,32 @@ RageSoundDriver* RageSoundDriver::Create(const std::string& drivers) {
 
     size_t to_try = 0;
 
+    // Driver names are matched case-insensitively: "wasapi" should not be
+    // rejected just because the registered name is "WASAPI".
+    auto findDriver = [](const std::string& name) {
+      return std::find_if(
+          GetDefaultSoundDriverList().begin(),
+          GetDefaultSoundDriverList().end(), [&name](const std::string& valid) {
+            return valid.size() == name.size() &&
+                   std::equal(
+                       valid.begin(), valid.end(), name.begin(),
+                       [](char a, char b) {
+                         return std::tolower(static_cast<unsigned char>(a)) ==
+                                std::tolower(static_cast<unsigned char>(b));
+                       });
+          });
+    };
+
     while (to_try < driversToTry.size()) {
-      if (std::find(
-              GetDefaultSoundDriverList().begin(),
-              GetDefaultSoundDriverList().end(),
-              driversToTry[to_try]) == GetDefaultSoundDriverList().end()) {
+      auto it = findDriver(driversToTry[to_try]);
+      if (it == GetDefaultSoundDriverList().end()) {
         LOG->Warn(
             "Removed unusable sound driver %s", driversToTry[to_try].c_str());
         WarnUserAboutBadSoundDriverEntry();
         driversToTry.erase(driversToTry.begin() + to_try);
       } else {
+        // Normalize to the registered spelling so driver creation works.
+        driversToTry[to_try] = *it;
         ++to_try;
       }
     }

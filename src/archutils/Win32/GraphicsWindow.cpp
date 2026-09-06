@@ -198,10 +198,19 @@ GraphicsWindow_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 }
 
 static void AdjustVideoModeParams(VideoModeParams& p) {
+  // Respect an explicitly requested refresh rate instead of overwriting
+  // it with the desktop's current rate.
+  if (p.rate != REFRESH_DEFAULT) {
+    return;
+  }
   DEVMODE dm;
   ZERO(dm);
   dm.dmSize = sizeof(dm);
-  if (!EnumDisplaySettings(p.sDisplayId.c_str(), ENUM_CURRENT_SETTINGS, &dm)) {
+  // EnumDisplaySettings expects NULL, not an empty string, for the
+  // current display; an empty string always fails.
+  const char* sDisplay =
+      p.sDisplayId.empty() ? nullptr : p.sDisplayId.c_str();
+  if (!EnumDisplaySettings(sDisplay, ENUM_CURRENT_SETTINGS, &dm)) {
     p.rate = 60;
     LOG->Warn(
         "%s",
@@ -383,9 +392,31 @@ void GraphicsWindow::CreateGraphicsWindow(
   }
   SetWindowLong(g_hWndMain, GWL_STYLE, iWindowStyle);
 
+  /* A borderless fullscreen window must cover the whole display. Size it
+   * from the display's current mode rather than the preferred resolution,
+   * which may differ from the desktop size (the preferred size still
+   * applies to exclusive fullscreen and plain windowed modes). */
+  int iClientWidth = p.width;
+  int iClientHeight = p.height;
+  if (p.windowed && p.bWindowIsFullscreenBorderless) {
+    const char* sDisplay =
+        p.sDisplayId.empty() ? nullptr : p.sDisplayId.c_str();
+    if (EnumDisplaySettingsEx(
+            sDisplay, ENUM_CURRENT_SETTINGS, &devmode, 0) &&
+        deviceModeIsValid(devmode)) {
+      iClientWidth = devmode.dmPelsWidth;
+      iClientHeight = devmode.dmPelsHeight;
+      g_CurrentParams.width = iClientWidth;
+      g_CurrentParams.height = iClientHeight;
+    }
+    resetDeviceMode(devmode);
+  }
+
   // Set rectangle for window based on the preferred display and resolution
   RECT WindowRect;
-  SetRect(&WindowRect, pos.x, pos.y, pos.x + p.width, pos.y + p.height);
+  SetRect(
+      &WindowRect, pos.x, pos.y, pos.x + iClientWidth,
+      pos.y + iClientHeight);
   AdjustWindowRect(&WindowRect, iWindowStyle, FALSE);
 
   // LOG->Warn( "w = %d, h = %d", p.width, p.height );

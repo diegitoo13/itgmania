@@ -3,7 +3,12 @@
 // clang-format off
 #include <windows.h>
 #include <versionhelpers.h>
+#include <avrt.h>
 // clang-format on
+
+#if defined(_MSC_VER)
+#pragma comment(lib, "avrt.lib")
+#endif
 
 #include <cstdint>
 #include <string>
@@ -146,6 +151,8 @@ void ArchHooks_Win32::SetTime(tm newtime) {
   SetLocalTime(&st);
 }
 
+static HANDLE g_hMmcsTask = nullptr;
+
 void ArchHooks_Win32::BoostPriority() {
   // We just want a slight boost, so we don't skip needlessly if something
   // happens in the background. We don't really want to be high-priority—above
@@ -157,10 +164,27 @@ void ArchHooks_Win32::BoostPriority() {
   // Also note that high priority won't prevent the game from being interrupted
   // by Windows notifications - that needs to be handled within ArchUtils.
   SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+
+  // Register the main thread with the Multimedia Class Scheduler so frame
+  // pacing and input polling get treated as a multimedia workload. This
+  // reduces scheduling jitter from background tasks.
+  DWORD dwTaskIndex = 0;
+  g_hMmcsTask = AvSetMmThreadCharacteristicsW(L"Games", &dwTaskIndex);
+  if (g_hMmcsTask == nullptr) {
+    LOG->Warn(
+        "AvSetMmThreadCharacteristics failed: %s",
+        werr_ssprintf(GetLastError(), "").c_str());
+  } else {
+    LOG->Info("MMCSS: main thread registered as 'Games' task");
+  }
 }
 
 void ArchHooks_Win32::UnBoostPriority() {
   SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+  if (g_hMmcsTask != nullptr) {
+    AvRevertMmThreadCharacteristics(g_hMmcsTask);
+    g_hMmcsTask = nullptr;
+  }
 }
 
 void ArchHooks_Win32::SetupConcurrentRenderingThread() {
