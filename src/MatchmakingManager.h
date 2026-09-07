@@ -86,6 +86,10 @@ class MatchmakingManager {
   const std::string& GetOpponentName() const { return m_sOpponentName; }
   const std::string& GetOpponentCountry() const { return m_sOpponentCountry; }
   const std::string& GetOpponentIconPath() const { return m_sOpponentIconPath; }
+  /* The local player's avatar image path ("" if none): the Simply Love
+   * <profile dir>/avatar.* convention, falling back to the character
+   * card. Exposed so scenes can show the local player their own icon. */
+  std::string GetLocalIconPath() const;
   const MatchmakingOpponentStats& GetOpponentStats() const {
     return m_OpponentStats;
   }
@@ -119,9 +123,8 @@ class MatchmakingManager {
   void SetState(SearchState state);
   std::string GetServerUrl() const;
   std::string GetDisplayName() const;
-  /* Icon sent in the hello message: the local profile's avatar (the
-   * Simply Love <profile dir>/avatar.* convention, falling back to the
-   * character card), base64-encoded ("" if none). */
+  /* Icon sent in the hello message: the local player's avatar from
+   * GetLocalIconPath(), base64-encoded ("" if none). */
   std::string GetLocalIconBase64() const;
   void SaveOpponentIcon(const std::string& base64Icon);
   void BroadcastStateChanged();

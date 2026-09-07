@@ -186,6 +186,34 @@ std::string MatchmakingManager::GetDisplayName() const {
   return "Player";
 }
 
+std::string MatchmakingManager::GetLocalIconPath() const {
+  // Preferred source: the Simply Love avatar convention,
+  // <profile dir>/avatar.{png,jpg,jpeg,bmp,gif} - one file then serves both
+  // the theme's profile card and the online hello.
+  const std::string sProfileDir =
+      PROFILEMAN->GetProfileDir((ProfileSlot)m_LocalPlayer);
+  if (!sProfileDir.empty()) {
+    static const char* kAvatarExts[] = {"png", "jpg", "jpeg", "bmp", "gif"};
+    for (const char* ext : kAvatarExts) {
+      const std::string sPath = sProfileDir + "avatar." + ext;
+      if (DoesFileExist(sPath)) {
+        return sPath;
+      }
+    }
+  }
+
+  // Fallback: the profile's character card.
+  Profile* pProfile = PROFILEMAN->GetProfile(m_LocalPlayer);
+  if (pProfile == nullptr) {
+    return "";
+  }
+  Character* pCharacter = pProfile->GetCharacter();
+  if (pCharacter == nullptr) {
+    return "";
+  }
+  return pCharacter->GetCardPath();
+}
+
 std::string MatchmakingManager::GetLocalIconBase64() const {
   auto encodeFile = [](const std::string& sPath) -> std::string {
     RageFile file;
@@ -218,34 +246,11 @@ std::string MatchmakingManager::GetLocalIconBase64() const {
     return out;
   };
 
-  // Preferred source: the Simply Love avatar convention,
-  // <profile dir>/avatar.{png,jpg,jpeg,bmp,gif} - one file then serves both
-  // the theme's profile card and the online hello.
-  const std::string sProfileDir =
-      PROFILEMAN->GetProfileDir((ProfileSlot)m_LocalPlayer);
-  if (!sProfileDir.empty()) {
-    static const char* kAvatarExts[] = {"png", "jpg", "jpeg", "bmp", "gif"};
-    for (const char* ext : kAvatarExts) {
-      const std::string sPath = sProfileDir + "avatar." + ext;
-      if (DoesFileExist(sPath)) {
-        std::string sOut = encodeFile(sPath);
-        if (!sOut.empty()) {
-          return sOut;
-        }
-      }
-    }
-  }
-
-  // Fallback: the profile's character card.
-  Profile* pProfile = PROFILEMAN->GetProfile(m_LocalPlayer);
-  if (pProfile == nullptr) {
+  const std::string sPath = GetLocalIconPath();
+  if (sPath.empty()) {
     return "";
   }
-  Character* pCharacter = pProfile->GetCharacter();
-  if (pCharacter == nullptr || pCharacter->GetCardPath().empty()) {
-    return "";
-  }
-  return encodeFile(pCharacter->GetCardPath());
+  return encodeFile(sPath);
 }
 
 void MatchmakingManager::Connect() {
@@ -1276,6 +1281,11 @@ class LunaMatchmakingManager : public Luna<MatchmakingManager> {
     return 1;
   }
 
+  static int GetLocalIconPath(T* p, lua_State* L) {
+    lua_pushstring(L, p->GetLocalIconPath().c_str());
+    return 1;
+  }
+
   static int GetOpponentStats(T* p, lua_State* L) {
     const MatchmakingOpponentStats& st = p->GetOpponentStats();
     lua_newtable(L);
@@ -1332,6 +1342,7 @@ class LunaMatchmakingManager : public Luna<MatchmakingManager> {
     ADD_METHOD(GetOpponentName);
     ADD_METHOD(GetOpponentCountry);
     ADD_METHOD(GetOpponentIconPath);
+  ADD_METHOD(GetLocalIconPath);
     ADD_METHOD(GetOpponentStats);
     ADD_METHOD(CancelSearch);
     ADD_METHOD(GetResumeScreen);

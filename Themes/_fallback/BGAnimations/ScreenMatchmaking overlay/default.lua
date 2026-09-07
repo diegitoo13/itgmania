@@ -63,6 +63,18 @@ local function initial_of(name)
 	return name:sub(1, 1):upper()
 end
 
+-- Load the local player's avatar into a player card (same treatment the
+-- opponent card gets), if the player has one.
+local function load_local_icon(card)
+	local path = MATCHMAKING:GetLocalIconPath()
+	if path ~= nil and path ~= "" then
+		card:GetChild("Icon"):Load(path)
+		card:GetChild("Icon"):SetSize(88, 88)
+		card:GetChild("Icon"):visible(true)
+		card:GetChild("Ring"):visible(false)
+	end
+end
+
 -- A player "card": accent bar + ring/initial (or icon) + Label + Country chip
 -- + Name, all addressable via GetChild.
 local function PlayerCard(accent, fallback_initial)
@@ -280,6 +292,7 @@ waiting_group[#waiting_group + 1] = PlayerCard(COLORS.you, initial_of(display_na
 		self:diffusealpha(1)
 		self:GetChild("Label"):settext("YOU")
 		self:GetChild("Name"):settext(display_name())
+		load_local_icon(self)
 	end,
 }
 
@@ -340,6 +353,7 @@ found_group[#found_group + 1] = PlayerCard(COLORS.you, initial_of(display_name()
 		self:visible(false)
 		self:GetChild("Label"):settext("YOU")
 		self:GetChild("Name"):settext(display_name())
+		load_local_icon(self)
 	end,
 }
 
