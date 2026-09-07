@@ -187,8 +187,56 @@ std::string MatchmakingManager::GetDisplayName() const {
 }
 
 std::string MatchmakingManager::GetLocalIconBase64() const {
-  // The matchmaking avatar is the local profile's character card; one
-  // image serves both the profile and the online hello.
+  auto encodeFile = [](const std::string& sPath) -> std::string {
+    RageFile file;
+    if (!file.Open(sPath)) {
+      return "";
+    }
+    const int iSize = file.GetFileSize();
+    // Keep the hello small: skip absurdly large images.
+    if (iSize <= 0 || iSize > 512 * 1024) {
+      return "";
+    }
+    std::string data(iSize, '\0');
+    if (file.Read(data.data(), iSize) != iSize) {
+      return "";
+    }
+    size_t iOutLen = 0;
+    mbedtls_base64_encode(
+        nullptr, 0, &iOutLen,
+        reinterpret_cast<const unsigned char*>(data.data()), data.size());
+    std::string out(iOutLen, '\0');
+    size_t iWritten = 0;
+    if (mbedtls_base64_encode(
+            reinterpret_cast<unsigned char*>(out.data()), out.size(),
+            &iWritten,
+            reinterpret_cast<const unsigned char*>(data.data()),
+            data.size()) != 0) {
+      return "";
+    }
+    out.resize(iWritten);
+    return out;
+  };
+
+  // Preferred source: the Simply Love avatar convention,
+  // <profile dir>/avatar.{png,jpg,jpeg,bmp,gif} - one file then serves both
+  // the theme's profile card and the online hello.
+  const std::string sProfileDir =
+      PROFILEMAN->GetProfileDir((ProfileSlot)m_LocalPlayer);
+  if (!sProfileDir.empty()) {
+    static const char* kAvatarExts[] = {"png", "jpg", "jpeg", "bmp", "gif"};
+    for (const char* ext : kAvatarExts) {
+      const std::string sPath = sProfileDir + "avatar." + ext;
+      if (DoesFileExist(sPath)) {
+        std::string sOut = encodeFile(sPath);
+        if (!sOut.empty()) {
+          return sOut;
+        }
+      }
+    }
+  }
+
+  // Fallback: the profile's character card.
   Profile* pProfile = PROFILEMAN->GetProfile(m_LocalPlayer);
   if (pProfile == nullptr) {
     return "";
@@ -197,35 +245,7 @@ std::string MatchmakingManager::GetLocalIconBase64() const {
   if (pCharacter == nullptr || pCharacter->GetCardPath().empty()) {
     return "";
   }
-
-  RageFile file;
-  if (!file.Open(pCharacter->GetCardPath())) {
-    return "";
-  }
-  const int iSize = file.GetFileSize();
-  // Keep the hello small: skip absurdly large card files.
-  if (iSize <= 0 || iSize > 512 * 1024) {
-    return "";
-  }
-  std::string data(iSize, '\0');
-  if (file.Read(data.data(), iSize) != iSize) {
-    return "";
-  }
-
-  size_t iOutLen = 0;
-  mbedtls_base64_encode(
-      nullptr, 0, &iOutLen,
-      reinterpret_cast<const unsigned char*>(data.data()), data.size());
-  std::string out(iOutLen, '\0');
-  size_t iWritten = 0;
-  if (mbedtls_base64_encode(
-          reinterpret_cast<unsigned char*>(out.data()), out.size(), &iWritten,
-          reinterpret_cast<const unsigned char*>(data.data()),
-          data.size()) != 0) {
-    return "";
-  }
-  out.resize(iWritten);
-  return out;
+  return encodeFile(pCharacter->GetCardPath());
 }
 
 void MatchmakingManager::Connect() {

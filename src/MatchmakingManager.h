@@ -119,8 +119,9 @@ class MatchmakingManager {
   void SetState(SearchState state);
   std::string GetServerUrl() const;
   std::string GetDisplayName() const;
-  /* Icon sent in the hello message: the local profile's character card
-   * image, base64-encoded ("" if none). */
+  /* Icon sent in the hello message: the local profile's avatar (the
+   * Simply Love <profile dir>/avatar.* convention, falling back to the
+   * character card), base64-encoded ("" if none). */
   std::string GetLocalIconBase64() const;
   void SaveOpponentIcon(const std::string& base64Icon);
   void BroadcastStateChanged();
