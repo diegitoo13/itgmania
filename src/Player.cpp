@@ -26,6 +26,7 @@
 #include "InputMapper.h"
 #include "LifeMeter.h"
 #include "LuaManager.h"
+#include "MatchmakingManager.h"
 #include "MessageManager.h"
 #include "NoteDataUtil.h"
 #include "NoteDataWithScoring.h"
@@ -1268,6 +1269,53 @@ void Player::Update(float fDeltaTime) {
             m_bDelay = false;
           }
           CrossedRows(iRowNow, now);
+        }
+      }
+    }
+
+    // Apply streamed judgments from the remote opponent. The remote display
+    // is eventually consistent: catch-up after a lag spike is spread over
+    // multiple frames so a burst of buffered events never hitches a frame.
+    if (m_pPlayerState->m_PlayerController == PC_NETWORK &&
+        MATCHMAKING != nullptr && MATCHMAKING->IsInMatch()) {
+      std::vector<NetworkJudgmentEvent> vNetworkEvents;
+      MATCHMAKING->GetDueNetworkEvents(iRowNow, vNetworkEvents);
+      int iApplied = 0;
+      for (const NetworkJudgmentEvent& event : vNetworkEvents) {
+        if (iApplied >= 64) {
+          break;  // the rest stay queued for the next frame
+        }
+        auto Consume = [&]() {
+          TapNoteScore tnsDrop = TNS_None;
+          float fOffsetDrop = 0.0f;
+          MATCHMAKING->ConsumeNetworkJudgment(
+              m_pPlayerState->m_PlayerNumber, event.col, event.row, tnsDrop,
+              fOffsetDrop);
+        };
+        if (event.col < 0 || event.col >= m_NoteData.GetNumTracks()) {
+          Consume();  // column doesn't exist locally; drop the event
+          continue;
+        }
+        NoteData::iterator iter = m_NoteData.FindTapNote(event.col, event.row);
+        if (iter == m_NoteData.end(event.col)) {
+          Consume();  // the note doesn't exist locally; drop the event
+          continue;
+        }
+        TapNote& tn = iter->second;
+        if (tn.result.tns != TNS_None) {
+          Consume();  // already judged (late or duplicate event); drop it
+          continue;
+        }
+        if (event.tns == TNS_Miss) {
+          Consume();
+          if (tn.type != TapNoteType_Mine) {
+            tn.result.tns = TNS_Miss;
+            ++iApplied;
+          }
+        } else {
+          // The PC_NETWORK case in Step consumes the event.
+          Step(event.col, event.row, now, false, false);
+          ++iApplied;
         }
       }
     }
@@ -2645,6 +2693,33 @@ void Player::Step(
         }
 
         break;
+      }
+
+      case PC_NETWORK: {
+        TapNoteScore networkTns = TNS_None;
+        float fNetworkOffset = 0.0f;
+        if (MATCHMAKING == nullptr ||
+            !MATCHMAKING->ConsumeNetworkJudgment(
+                m_pPlayerState->m_PlayerNumber, col,
+                iRowOfOverlappingNoteOrRow, networkTns, fNetworkOffset)) {
+          // No streamed judgment for this note (yet); leave it unjudged.
+          return;
+        }
+        if (pTN->type == TapNoteType_Mine) {
+          if (networkTns != TNS_HitMine) {
+            return;  // avoided; mines are scored when crossed
+          }
+          score = TNS_HitMine;
+        } else if (networkTns == TNS_Miss) {
+          // Misses are applied directly by the network event drain in
+          // Player::Update, not through Step.
+          return;
+        } else {
+          score = networkTns;
+          fNoteOffset = -fNetworkOffset;
+        }
+        break;
+      }
 
         /*
         case PC_REPLAY:
@@ -2654,7 +2729,6 @@ void Player::Step(
                 fNoteOffset = TapNoteOffset attribute
                 break;
         */
-      }
       default:
         FAIL_M(ssprintf(
             "Invalid player controller type: %i",
@@ -2761,6 +2835,11 @@ void Player::Step(
           pTN->result.tns = score;
           pTN->result.fTapNoteOffset = -fNoteOffset;
           pTN->result.bHeld = false;
+          if (MATCHMAKING != nullptr) {
+            MATCHMAKING->NoteLocalJudgment(
+                m_pPlayerState->m_PlayerNumber, iRowOfOverlappingNoteOrRow, col,
+                score, -fNoteOffset);
+          }
         }
       }
     }
@@ -2887,12 +2966,24 @@ void Player::UpdateTapNotesMissedOlderThan(float fMissIfOlderThanSeconds) {
       if (m_pSecondaryScoreKeeper) {
         m_pSecondaryScoreKeeper->HandleTapScore(tn);
       }
+    } else if (
+        m_pPlayerState->m_PlayerController == PC_NETWORK &&
+        MATCHMAKING != nullptr && MATCHMAKING->IsInMatch()) {
+      // The remote player's streamed judgments decide; misses arrive as
+      // network events and are applied by the drain in Player::Update. If
+      // the match is over (opponent gone), fall through to the normal
+      // auto-miss path so their unplayed notes miss out naturally.
     } else {
       if (tn.result.earlyTns != TNS_None) {
         tn.result.tns = tn.result.earlyTns;
         tn.result.fTapNoteOffset = tn.result.fEarlyTapNoteOffset;
       } else {
         tn.result.tns = TNS_Miss;
+      }
+      if (MATCHMAKING != nullptr) {
+        MATCHMAKING->NoteLocalJudgment(
+            m_pPlayerState->m_PlayerNumber, iter.Row(), iter.Track(),
+            tn.result.tns, tn.result.fTapNoteOffset);
       }
     }
   }
@@ -3146,7 +3237,8 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
     }
 
     // check to see if there's a note at the crossed row
-    if (m_pPlayerState->m_PlayerController != PC_HUMAN) {
+    if (m_pPlayerState->m_PlayerController != PC_HUMAN &&
+        m_pPlayerState->m_PlayerController != PC_NETWORK) {
       if (tn.type != TapNoteType_Empty && tn.type != TapNoteType_Fake &&
           tn.type != TapNoteType_AutoKeysound && tn.result.tns == TNS_None &&
           this->m_Timing->IsJudgableAtRow(iRow)) {

@@ -66,6 +66,7 @@
 #include "LightsManager.h"
 #include "LuaDebugManager.h"
 #include "LuaManager.h"
+#include "MatchmakingManager.h"
 #include "MemoryCardManager.h"
 #include "MessageManager.h"
 #include "ModelManager.h"
@@ -272,6 +273,7 @@ void ShutdownGame() {
     LIGHTSMAN->TurnOffAllLights();
   }
 
+  RageUtil::SafeDelete(MATCHMAKING);
   RageUtil::SafeDelete(NETWORK);
   RageUtil::SafeDelete(SCREENMAN);
   RageUtil::SafeDelete(STATSMAN);
@@ -940,6 +942,7 @@ int sm_main(int argc, char* argv[]) {
   SONGMAN->UpdatePopular();
   SONGMAN->UpdatePreferredSort();
   NETWORK = new NetworkManager;
+  MATCHMAKING = new MatchmakingManager;
   STATSMAN = new StatsManager;
 
   // Initialize which courses are ranking courses here.

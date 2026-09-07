@@ -14,6 +14,7 @@
 #include "InputMapper.h"
 #include "LightsManager.h"
 #include "LuaManager.h"
+#include "MatchmakingManager.h"
 #include "MessageManager.h"
 #include "RageInputDevice.h"
 #include "RageLog.h"
@@ -263,6 +264,9 @@ void Screen::HandleScreenMessage(const ScreenMessage SM) {
     } else {
       std::string ToScreen =
           (SM == SM_GoToNextScreen ? GetNextScreenName() : GetPrevScreen());
+      if (SM == SM_GoToNextScreen && MATCHMAKING != nullptr) {
+        ToScreen = MATCHMAKING->FilterNextScreen(m_sName, ToScreen);
+      }
       if (ToScreen == "") {
         LuaHelpers::ReportScriptError("Error:  Tried to go to empty screen.");
       } else {

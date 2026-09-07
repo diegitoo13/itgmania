@@ -669,6 +669,9 @@ class DebugLineAutoplay : public IDebugLine {
       case PC_CPU:
         return CPU.GetValue();
         break;
+      case PC_NETWORK:
+        return "Network";
+        break;
       default:
         FAIL_M(ssprintf("Invalid PlayerController: %i", pc));
     }

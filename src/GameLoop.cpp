@@ -9,6 +9,7 @@
 #include "InputMapper.h"
 #include "LightsManager.h"
 #include "LuaManager.h"
+#include "MatchmakingManager.h"
 #include "MemoryCardManager.h"
 #include "NetworkManager.h"
 #include "PeriodicCaller.h"
@@ -264,6 +265,7 @@ void GameLoop::UpdateAllButDraw() {
   TEXTUREMAN->Update(fDeltaTime);
   GAMESTATE->Update(fDeltaTime);
   NETWORK->Update();
+  MATCHMAKING->Update();
   SCREENMAN->Update(fDeltaTime);
   MEMCARDMAN->Update();
 

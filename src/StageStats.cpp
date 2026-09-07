@@ -12,6 +12,7 @@
 #include "GameState.h"
 #include "HighScore.h"
 #include "LuaManager.h"
+#include "MatchmakingManager.h"
 #include "PlayerNumber.h"
 #include "PlayerStageStats.h"
 #include "PlayerState.h"
@@ -346,6 +347,11 @@ void StageStats::FinalizeScores(bool bSummary) {
 
     // Don't save DQ'd scores
     if (hs.GetDisqualified()) {
+      continue;
+    }
+
+    // Don't save scores earned by a remote matchmaking opponent.
+    if (MATCHMAKING != nullptr && MATCHMAKING->IsNetworkPlayer(p)) {
       continue;
     }
 

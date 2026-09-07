@@ -76,6 +76,8 @@ void ScreenSyncOverlay::UpdateText() {
     case PC_CPU:
       vs.push_back(AUTO_PLAY_CPU);
       break;
+    case PC_NETWORK:
+      break;
     default:
       FAIL_M(ssprintf("Invalid PlayerController: %i", pc));
   }

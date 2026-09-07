@@ -34,6 +34,7 @@
 #include "LocalizedString.h"
 #include "LuaManager.h"
 #include "LuaReference.h"
+#include "MatchmakingManager.h"
 #include "MemoryCardManager.h"
 #include "MessageManager.h"
 #include "ModsGroup.h"
@@ -1480,6 +1481,10 @@ static LocalizedString PLAYER2("GameState", "Player 2");
 static LocalizedString CPU("GameState", "CPU");
 std::string GameState::GetPlayerDisplayName(PlayerNumber pn) const {
   ASSERT(IsPlayerEnabled(pn));
+  if (MATCHMAKING != nullptr && MATCHMAKING->IsNetworkPlayer(pn) &&
+      !MATCHMAKING->GetOpponentName().empty()) {
+    return MATCHMAKING->GetOpponentName();
+  }
   const LocalizedString* pDefaultNames[] = {&PLAYER1, &PLAYER2};
   if (IsHumanPlayer(pn)) {
     if (!PROFILEMAN->GetPlayerName(pn).empty()) {

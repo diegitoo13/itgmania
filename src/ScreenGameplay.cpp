@@ -39,6 +39,7 @@
 #include "LightsManager.h"
 #include "LuaManager.h"
 #include "LyricsLoader.h"
+#include "MatchmakingManager.h"
 #include "MemoryCardManager.h"
 #include "MessageManager.h"
 #include "ModsGroup.h"
@@ -1380,6 +1381,20 @@ void ScreenGameplay::LoadNextSong() {
               GamePreferences::m_AutoPlay;
         }
       }
+    }
+
+    // A matchmaking opponent's notefield is driven by streamed judgments.
+    if (MATCHMAKING != nullptr && pi->m_pn != PLAYER_INVALID &&
+        MATCHMAKING->IsNetworkPlayer(pi->m_pn)) {
+      pi->GetPlayerState()->m_PlayerController = PC_NETWORK;
+    }
+
+    // In the E2E bot driver the local player is CPU-driven so the run needs
+    // no input; PC_CPU (unlike PC_AUTOPLAY) accumulates stats normally.
+    if (MATCHMAKING != nullptr && pi->m_pn != PLAYER_INVALID &&
+        MATCHMAKING->IsBotLocalPlayer(pi->m_pn)) {
+      pi->GetPlayerState()->m_PlayerController = PC_CPU;
+      pi->GetPlayerState()->m_iCpuSkill = NUM_SKILL_LEVELS - 1;
     }
   }
 
@@ -2870,12 +2885,19 @@ void ScreenGameplay::StageFinished(bool bBackedOut) {
     FOREACH_HumanPlayer(p) GAMESTATE->m_iPlayerStageTokens[p] = 0;
   }
 
-  FOREACH_HumanPlayer(pn) STATSMAN->m_CurStageStats.m_player[pn].CalcAwards(
-      pn, STATSMAN->m_CurStageStats.m_bGaveUp,
-      STATSMAN->m_CurStageStats.m_bUsedAutoplay);
+  FOREACH_HumanPlayer(pn) {
+    if (MATCHMAKING != nullptr && MATCHMAKING->IsNetworkPlayer(pn)) {
+      continue;
+    }
+    STATSMAN->m_CurStageStats.m_player[pn].CalcAwards(
+        pn, STATSMAN->m_CurStageStats.m_bGaveUp,
+        STATSMAN->m_CurStageStats.m_bUsedAutoplay);
+  }
   STATSMAN->m_CurStageStats.FinalizeScores(false);
 
   GAMESTATE->CommitStageStats();
+
+  MATCHMAKING->OnStageFinished();
 
   // save current stage stats
   STATSMAN->m_vPlayedStageStats.push_back(STATSMAN->m_CurStageStats);

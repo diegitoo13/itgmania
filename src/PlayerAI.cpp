@@ -105,6 +105,12 @@ TapNoteScore PlayerAI::GetTapNoteScore(const PlayerState* pPlayerState) {
     return TNS_W1;
   }
 
+  // PC_NETWORK players are judged from streamed network events in
+  // Player::Step; the AI should never be consulted for them.
+  if (pPlayerState->m_PlayerController == PC_NETWORK) {
+    return TNS_Miss;
+  }
+
   /*
   // handle replay data playback -aj
   if( pPlayerState->m_PlayerController == PC_REPLAY )

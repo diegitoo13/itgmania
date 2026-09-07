@@ -390,6 +390,7 @@ enum PlayerController {
   PC_HUMAN,
   PC_AUTOPLAY,
   PC_CPU,
+  PC_NETWORK,
   // PC_REPLAY,
   NUM_PlayerController,
   PlayerController_Invalid

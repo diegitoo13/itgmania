@@ -15,6 +15,7 @@
 #include "GameState.h"
 #include "Grade.h"
 #include "LuaManager.h"
+#include "MatchmakingManager.h"
 #include "ModsGroup.h"
 #include "NotesWriterSM.h"
 #include "Player.h"
@@ -202,6 +203,9 @@ void StatsManager::CommitStatsToProfiles(const StageStats* pSS) {
   // way through the song, in which case we don't want to give credit for the
   // rest of the song.
   FOREACH_HumanPlayer(pn) {
+    if (MATCHMAKING != nullptr && MATCHMAKING->IsNetworkPlayer(pn)) {
+      continue;
+    }
     int iNumTapsAndHolds =
         (int)pSS->m_player[pn].m_radarActual[RadarCategory_TapsAndHolds];
     int iNumJumps = (int)pSS->m_player[pn].m_radarActual[RadarCategory_Jumps];
@@ -227,6 +231,9 @@ void StatsManager::CommitStatsToProfiles(const StageStats* pSS) {
   if (!GAMESTATE->m_bMultiplayer)  // FIXME
   {
     FOREACH_HumanPlayer(pn) {
+      if (MATCHMAKING != nullptr && MATCHMAKING->IsNetworkPlayer(pn)) {
+        continue;
+      }
       Profile* pPlayerProfile = PROFILEMAN->GetProfile(pn);
       if (pPlayerProfile) {
         pPlayerProfile->m_iTotalGameplaySeconds += iGameplaySeconds;
