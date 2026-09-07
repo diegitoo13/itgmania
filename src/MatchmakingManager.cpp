@@ -37,6 +37,8 @@
 #include "StdString.h"
 #include "Steps.h"
 #include "Style.h"
+#include "Character.h"
+#include "CharacterManager.h"
 #include "json/json.h"
 #include "mbedtls/base64.h"
 
@@ -184,6 +186,48 @@ std::string MatchmakingManager::GetDisplayName() const {
   return "Player";
 }
 
+std::string MatchmakingManager::GetLocalIconBase64() const {
+  // The matchmaking avatar is the local profile's character card; one
+  // image serves both the profile and the online hello.
+  Profile* pProfile = PROFILEMAN->GetProfile(m_LocalPlayer);
+  if (pProfile == nullptr) {
+    return "";
+  }
+  Character* pCharacter = pProfile->GetCharacter();
+  if (pCharacter == nullptr || pCharacter->GetCardPath().empty()) {
+    return "";
+  }
+
+  RageFile file;
+  if (!file.Open(pCharacter->GetCardPath())) {
+    return "";
+  }
+  const int iSize = file.GetFileSize();
+  // Keep the hello small: skip absurdly large card files.
+  if (iSize <= 0 || iSize > 512 * 1024) {
+    return "";
+  }
+  std::string data(iSize, '\0');
+  if (file.Read(data.data(), iSize) != iSize) {
+    return "";
+  }
+
+  size_t iOutLen = 0;
+  mbedtls_base64_encode(
+      nullptr, 0, &iOutLen,
+      reinterpret_cast<const unsigned char*>(data.data()), data.size());
+  std::string out(iOutLen, '\0');
+  size_t iWritten = 0;
+  if (mbedtls_base64_encode(
+          reinterpret_cast<unsigned char*>(out.data()), out.size(), &iWritten,
+          reinterpret_cast<const unsigned char*>(data.data()),
+          data.size()) != 0) {
+    return "";
+  }
+  out.resize(iWritten);
+  return out;
+}
+
 void MatchmakingManager::Connect() {
   if (m_bWebSocketRunning) {
     return;
@@ -278,6 +322,10 @@ void MatchmakingManager::SendHello() {
   Json::Value root;
   root["cmd"] = "hello";
   root["name"] = GetDisplayName();
+  std::string sIcon = GetLocalIconBase64();
+  if (!sIcon.empty()) {
+    root["icon"] = sIcon;
+  }
   SendJson(root);
 }
 
