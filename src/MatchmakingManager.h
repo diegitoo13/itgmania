@@ -111,6 +111,9 @@ class MatchmakingManager {
   void Connect();
   void Disconnect();
   void SendJson(const Json::Value& root);
+  /* Actual websocket sends happen on a dedicated thread so the game thread
+   * never pays for TLS/socket writes (see SendJson). */
+  void SendThreadMain();
   void SendHello();
   void SendQueue();
   void SendResult();
@@ -138,6 +141,16 @@ class MatchmakingManager {
   ix::WebSocket m_WebSocket;
   ix::SocketTLSOptions m_TlsOptions;
   bool m_bWebSocketRunning = false;
+
+  // Serialized outbound messages waiting for the send thread. The game
+  // thread only serializes + enqueues; TLS and socket writes happen on
+  // m_SendThread so gameplay never stalls on network I/O.
+  std::thread m_SendThread;
+  std::mutex m_OutboundMutex;
+  std::condition_variable m_OutboundCv;
+  std::deque<std::string> m_OutboundQueue;
+  bool m_bSendThreadShutdown = false;
+  unsigned m_iOutboundDrops = 0;
 
   SearchState m_SearchState = SearchState_Idle;
   bool m_bSearchRequested = false;

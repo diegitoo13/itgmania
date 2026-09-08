@@ -5,7 +5,9 @@
 
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
+#include <deque>
 #include <fstream>
 #include <functional>
 #include <mutex>
@@ -53,9 +55,9 @@ static const char* SearchStateNames[] = {
     "Idle", "Connecting", "Queued", "Matched", "Playing",
 };
 
-static constexpr int kMaxMainThreadTasksPerUpdate = 32;
-static constexpr float kMaxMainThreadTaskSecondsPerUpdate = 0.001f;
-static constexpr float kJudgmentFlushSeconds = 0.1f;
+static constexpr int kMaxMainThreadTasksPerUpdate = 16;
+static constexpr float kMaxMainThreadTaskSecondsPerUpdate = 0.00075f;
+static constexpr float kJudgmentFlushSeconds = 0.2f;
 static constexpr float kBotStartupDelaySeconds = 2.0f;
 static constexpr float kBotWatchdogSeconds = 600.0f;
 // Cap on buffered unapplied remote judgments (a full chart is a few thousand
@@ -105,6 +107,16 @@ MatchmakingManager::MatchmakingManager() {
 }
 
 MatchmakingManager::~MatchmakingManager() {
+  // Stop the send thread before touching the websocket it forwards to.
+  {
+    std::lock_guard<std::mutex> lock(m_OutboundMutex);
+    m_bSendThreadShutdown = true;
+  }
+  m_OutboundCv.notify_all();
+  if (m_SendThread.joinable()) {
+    m_SendThread.join();
+  }
+
   // Unregister with Lua.
   LUA->UnsetGlobal("MATCHMAKING");
 
@@ -261,7 +273,7 @@ void MatchmakingManager::Connect() {
   m_WebSocket.setUrl(GetServerUrl());
   m_WebSocket.setTLSOptions(m_TlsOptions);
   m_WebSocket.disableAutomaticReconnection();
-  m_WebSocket.setPingInterval(5);
+  m_WebSocket.setPingInterval(15);
   m_WebSocket.setOnMessageCallback([this](const ix::WebSocketMessagePtr& msg) {
     switch (msg->type) {
       case ix::WebSocketMessageType::Open:
@@ -340,7 +352,50 @@ void MatchmakingManager::SendJson(const Json::Value& root) {
     return;
   }
   Json::FastWriter writer;
-  m_WebSocket.send(writer.write(root));
+  std::string text = writer.write(root);
+
+  if (!m_SendThread.joinable()) {
+    m_SendThread = std::thread(&MatchmakingManager::SendThreadMain, this);
+  }
+  {
+    std::lock_guard<std::mutex> lock(m_OutboundMutex);
+    // If the connection is badly backed up, shed oldest judgment batches
+    // rather than grow memory or stall; the stall watchdog handles truly
+    // dead connections.
+    constexpr size_t kMaxOutboundQueued = 256;
+    while (m_OutboundQueue.size() >= kMaxOutboundQueued) {
+      m_OutboundQueue.pop_front();
+      ++m_iOutboundDrops;
+      if ((m_iOutboundDrops % 64) == 1) {
+        LOG->Warn("Matchmaking: outbound queue full, dropped %u messages.",
+                  m_iOutboundDrops);
+      }
+    }
+    m_OutboundQueue.push_back(std::move(text));
+  }
+  m_OutboundCv.notify_one();
+}
+
+void MatchmakingManager::SendThreadMain() {
+  for (;;) {
+    std::string text;
+    {
+      std::unique_lock<std::mutex> lock(m_OutboundMutex);
+      m_OutboundCv.wait(lock, [this] {
+        return !m_OutboundQueue.empty() || m_bSendThreadShutdown;
+      });
+      if (m_OutboundQueue.empty()) {
+        if (m_bSendThreadShutdown) {
+          return;
+        }
+        continue;
+      }
+      text = std::move(m_OutboundQueue.front());
+      m_OutboundQueue.pop_front();
+    }
+    // TLS + socket writes happen here, never on the game thread.
+    m_WebSocket.send(text);
+  }
 }
 
 void MatchmakingManager::SendHello() {
@@ -798,9 +853,13 @@ void MatchmakingManager::GetDueNetworkEvents(
   // are copied, not removed; the caller consumes them one by one via
   // ConsumeNetworkJudgment (directly for misses, through Player::Step for
   // hits), so events that couldn't be applied yet stay queued.
+  // Copied count is capped at what a frame can apply, so a large buffered
+  // backlog after a lag spike can't turn into per-frame copy stalls.
+  constexpr size_t kMaxDueEventsPerCall = 64;
   out.clear();
+  out.reserve(kMaxDueEventsPerCall);
   for (const auto& entry : m_RemoteEvents) {
-    if (entry.first.first > iRowNow) {
+    if (entry.first.first > iRowNow || out.size() >= kMaxDueEventsPerCall) {
       break;
     }
     out.push_back(entry.second);
