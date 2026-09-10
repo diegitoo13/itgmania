@@ -45,8 +45,8 @@ local T = {
 	slide      = 0.50,
 	slide_dist = 400,
 	drift      = 4,
-	fling_at   = 4.60,  -- cards hold on screen until here (photo moment)
-	fling      = 0.40,  -- engine transitions at 5.0s, right as they leave
+	fling_at   = 4.50,  -- cards complete their exit before the transition
+	fling      = 0.40,  -- engine transitions at 5.0s; fling done by 4.9s
 }
 
 -- ---------------------------------------------------------------- helpers

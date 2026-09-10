@@ -25,6 +25,7 @@ void ScreenMatchmaking::Init() {
   m_fMatchedCountdown = 0.0f;
   m_bWindupPlayed = false;
   m_bImpactPlayed = false;
+  m_bGameplayPrepared = false;
   m_bProceeding = false;
 
   std::string sResumeScreen = MATCHMAKING->GetResumeScreen();
@@ -107,6 +108,14 @@ void ScreenMatchmaking::Update(float fDeltaTime) {
     case MatchmakingManager::SearchState_Matched: {
       if (!m_bWindupPlayed) {
         PlayMatchedSounds();
+      }
+      // Build gameplay in the background of the VS intro so the handoff is
+      // instant (this is what ScreenStageInformation normally hides). The
+      // opponent is already joined at this point, so the prepared screen
+      // has both players.
+      if (!m_bGameplayPrepared) {
+        m_bGameplayPrepared = true;
+        SCREENMAN->PrepareScreen("ScreenGameplay");
       }
       if (m_fMatchedCountdown == 0.0f) {
         m_fMatchedCountdown = MATCHED_COUNTDOWN_SECONDS;

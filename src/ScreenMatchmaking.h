@@ -30,6 +30,7 @@ class ScreenMatchmaking : public ScreenWithMenuElements {
   float m_fMatchedCountdown;
   bool m_bWindupPlayed;
   bool m_bImpactPlayed;
+  bool m_bGameplayPrepared;
   bool m_bProceeding;
 };
 
