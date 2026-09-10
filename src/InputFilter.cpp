@@ -458,6 +458,25 @@ void InputFilter::GetPressedButtons(std::vector<DeviceInput>& array) const {
   array = g_CurrentState;
 }
 
+std::uint32_t InputFilter::GetPressedButtonMask(
+    InputDevice device, DeviceButton first, unsigned int count) const {
+  std::uint32_t mask = 0;
+  if (count > 32) {
+    count = 32;
+  }
+  LockMut(*queuemutex);
+  for (const DeviceInput& di : g_CurrentState) {
+    if (device != InputDevice_Invalid && di.device != device) {
+      continue;
+    }
+    int iOffset = static_cast<int>(di.button) - static_cast<int>(first);
+    if (iOffset >= 0 && iOffset < static_cast<int>(count)) {
+      mask |= 1u << iOffset;
+    }
+  }
+  return mask;
+}
+
 void InputFilter::UpdateCursorLocation(float _fX, float _fY) {
   m_MouseCoords.fX = _fX;
   m_MouseCoords.fY = _fY;
@@ -494,11 +513,24 @@ class LunaInputFilter : public Luna<InputFilter> {
     lua_pushnumber(L, fZ);
     return 1;
   }
+  // Args: device (InputDevice enum value, -1 = any), first joystick button
+  // (1-based, so 9 = JOY_BUTTON_9), count. Returns a bitmask of pressed
+  // buttons. Joystick-relative so themes don't need raw enum values.
+  static int GetPressedButtonMask(T* p, lua_State* L) {
+    int iDevice = IArg(1);
+    InputDevice device = iDevice < 0 ? InputDevice_Invalid
+                                     : static_cast<InputDevice>(iDevice);
+    DeviceButton first = static_cast<DeviceButton>(JOY_BUTTON_1 + IArg(2) - 1);
+    unsigned int count = static_cast<unsigned int>(IArg(3));
+    lua_pushnumber(L, p->GetPressedButtonMask(device, first, count));
+    return 1;
+  }
 
   LunaInputFilter() {
     ADD_METHOD(GetMouseX);
     ADD_METHOD(GetMouseY);
     ADD_METHOD(GetMouseWheel);
+    ADD_METHOD(GetPressedButtonMask);
   }
 };
 

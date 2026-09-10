@@ -316,6 +316,7 @@ PrefsManager::PrefsManager()
       m_bLightsBassParallel("LightsBassParallel", false),
       m_bAllowUnacceleratedRenderer("AllowUnacceleratedRenderer", false),
       m_bThreadedInput("ThreadedInput", true),
+      m_bPadSensorDiagnostics("PadSensorDiagnostics", false),
       m_bThreadedMovieDecode("ThreadedMovieDecode", true),
       m_sTestInitialScreen("TestInitialScreen", ""),
       m_bDebugLights("DebugLights", false),

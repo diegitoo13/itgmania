@@ -1,6 +1,7 @@
 #ifndef PLAYER_H
 #define PLAYER_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -104,7 +105,9 @@ class Player : public ActorFrame {
   void ScoreAllActiveHoldsLetGo();
   void DoTapScoreNone();
 
-  void Step(int col, int row, const RageTimer& tm, bool bHeld, bool bRelease);
+  void Step(
+      int col, int row, const RageTimer& tm, bool bHeld, bool bRelease,
+      std::uint32_t uSensorMask = 0);
 
   void FadeToFail();
   void CacheAllUsedNoteSkins();

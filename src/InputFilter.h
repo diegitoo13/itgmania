@@ -4,6 +4,7 @@
 #ifndef INPUT_FILTER_H
 #define INPUT_FILTER_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -81,6 +82,11 @@ class InputFilter {
 
   void GetInputEvents(std::vector<InputEvent>& aEventOut);
   void GetPressedButtons(std::vector<DeviceInput>& array) const;
+  /* Bitmask of currently pressed buttons in [first, first+count) on one
+   * device (InputDevice_Invalid = any device). Bit i = button first+i.
+   * Used by pad sensor diagnostics to read unmapped per-sensor buttons. */
+  std::uint32_t GetPressedButtonMask(
+      InputDevice device, DeviceButton first, unsigned int count) const;
 
   // cursor
   void UpdateCursorLocation(float _fX, float _fY);

@@ -4,6 +4,7 @@
 #define NOTE_TYPES_H
 
 #include <cmath>
+#include <cstdint>
 #include <string>
 
 #include "EnumHelper.h"
@@ -45,6 +46,14 @@ struct TapNoteResult {
 
   /** @brief Track if the note was held. Used to track held misses. */
   bool bHeld;
+
+  /**
+   * @brief Bitmask of pad sensor buttons active when this note was judged.
+   *
+   * Only populated when the PadSensorDiagnostics preference is on and the
+   * input device exposes per-sensor buttons; zero otherwise. Bits are in
+   * device button order for the panel's sensor group. */
+  std::uint32_t uSensorMask = 0;
 
   // XML
   XNode* CreateNode() const;

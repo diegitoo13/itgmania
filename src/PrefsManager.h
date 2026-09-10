@@ -337,6 +337,10 @@ class PrefsManager {
   Preference<bool> m_bLightsBassParallel;
   Preference<bool> m_bAllowUnacceleratedRenderer;
   Preference<bool> m_bThreadedInput;
+  /** @brief Record which pad sensor buttons fired for each step (requires a
+   * pad that exposes per-sensor buttons, e.g. a Technomotion-style controller
+   * in diagnostic mode). Off means zero capture overhead. */
+  Preference<bool> m_bPadSensorDiagnostics;
   Preference<bool> m_bThreadedMovieDecode;
   Preference<std::string> m_sTestInitialScreen;
   Preference<bool> m_bDebugLights;

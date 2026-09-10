@@ -2267,7 +2267,8 @@ void Player::PlayKeysound(const TapNote& tn, TapNoteScore score) {
 }
 
 void Player::Step(
-    int col, int row, const RageTimer& tm, bool bHeld, bool bRelease) {
+    int col, int row, const RageTimer& tm, bool bHeld, bool bRelease,
+    std::uint32_t uSensorMask) {
   if (IsOniDead()) {
     return;
   }
@@ -2812,6 +2813,7 @@ void Player::Step(
         if (pTN->result.earlyTns == TNS_None) {
           pTN->result.earlyTns = score;
           pTN->result.fEarlyTapNoteOffset = -fNoteOffset;
+          pTN->result.uSensorMask = uSensorMask;
           ChangeLife(score);
           // We don't want to trigger a JudgmentMessage since we use that to
           // indicate "finalized" judgments. We handle that elsewhere so instead
@@ -2835,6 +2837,7 @@ void Player::Step(
           pTN->result.tns = score;
           pTN->result.fTapNoteOffset = -fNoteOffset;
           pTN->result.bHeld = false;
+          pTN->result.uSensorMask = uSensorMask;
           if (MATCHMAKING != nullptr) {
             MATCHMAKING->NoteLocalJudgment(
                 m_pPlayerState->m_PlayerNumber, iRowOfOverlappingNoteOrRow, col,

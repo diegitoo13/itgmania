@@ -230,12 +230,14 @@ class LunaTapNoteResult : public Luna<TapNoteResult> {
   DEFINE_METHOD(GetTapNoteOffset, fTapNoteOffset);
   DEFINE_METHOD(GetHidden, bHidden);
   DEFINE_METHOD(GetHeld, bHeld);
+  DEFINE_METHOD(GetSensorMask, uSensorMask);
 
   LunaTapNoteResult() {
     ADD_METHOD(GetTapNoteScore);
     ADD_METHOD(GetTapNoteOffset);
     ADD_METHOD(GetHidden);
     ADD_METHOD(GetHeld);
+    ADD_METHOD(GetSensorMask);
   }
 };
 LUA_REGISTER_CLASS(TapNoteResult)

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -2628,6 +2629,30 @@ void ScreenGameplay::ResetGiveUpTimers(bool show_text) {
   AbortGiveUp(show_text);
 }
 
+namespace {
+/* Pad sensor diagnostics (preference PadSensorDiagnostics): pads like the
+ * Technomotion-style Teensy controller can expose their per-panel sensors as
+ * extra HID buttons in an opt-in diagnostic mode. The convention is 4 buttons
+ * per panel starting at JOY_BUTTON_9, in panel order Up, Down, Left, Right
+ * (matching the firmware's sensor mask order). These buttons are intentionally
+ * left unmapped in KeyMaps so they never generate game input themselves; they
+ * are only read as state when a real panel press is judged. */
+DeviceButton PadSensorFirstButton(GameButton button) {
+  switch (button) {
+    case DANCE_BUTTON_UP:
+      return JOY_BUTTON_9;
+    case DANCE_BUTTON_DOWN:
+      return JOY_BUTTON_13;
+    case DANCE_BUTTON_LEFT:
+      return JOY_BUTTON_17;
+    case DANCE_BUTTON_RIGHT:
+      return JOY_BUTTON_21;
+    default:
+      return DeviceButton_Invalid;
+  }
+}
+}  // namespace
+
 bool ScreenGameplay::Input(const InputEventPlus& input) {
   // LOG->Trace( "ScreenGameplay::Input()" );
 
@@ -2739,12 +2764,29 @@ bool ScreenGameplay::Input(const InputEventPlus& input) {
       return false;
   }
 
+  /* If pad sensor diagnostics are on, read this panel's sensor buttons at
+   * judgment time. Use the current InputFilter state rather than
+   * input.InputList: the panel bit and the sensor bits change in the same
+   * HID report, but the panel event is queued before the sensor events of
+   * that batch, so the press-time snapshot can miss same-report sensor
+   * transitions. */
+  std::uint32_t uSensorMask = 0;
+  if (PREFSMAN->m_bPadSensorDiagnostics && input.type == IET_FIRST_PRESS &&
+      iCol != -1) {
+    DeviceButton first = PadSensorFirstButton(input.GameI.button);
+    if (first != DeviceButton_Invalid) {
+      uSensorMask =
+          INPUTFILTER->GetPressedButtonMask(input.DeviceI.device, first, 4);
+    }
+  }
+
   if (GAMESTATE->m_bMultiplayer) {
     if (input.mp != MultiPlayer_Invalid &&
         GAMESTATE->IsMultiPlayerEnabled(input.mp) && iCol != -1) {
       for (const PlayerInfo& pi : m_vPlayerInfo) {
         if (input.mp == pi.m_mp) {
-          pi.m_pPlayer->Step(iCol, -1, input.DeviceI.ts, false, bRelease);
+          pi.m_pPlayer->Step(
+              iCol, -1, input.DeviceI.ts, false, bRelease, uSensorMask);
         }
       }
       return true;
@@ -2771,9 +2813,9 @@ bool ScreenGameplay::Input(const InputEventPlus& input) {
           case GameButtonType_Step:
             if (iCol != -1) {
               m_vPlayerInfo[PLAYER_1].m_pPlayer->Step(
-                  iCol, -1, input.DeviceI.ts, false, bRelease);
+                  iCol, -1, input.DeviceI.ts, false, bRelease, uSensorMask);
               m_vPlayerInfo[PLAYER_2].m_pPlayer->Step(
-                  iCol, -1, input.DeviceI.ts, false, bRelease);
+                  iCol, -1, input.DeviceI.ts, false, bRelease, uSensorMask);
             }
             return true;
         }
@@ -2799,7 +2841,8 @@ bool ScreenGameplay::Input(const InputEventPlus& input) {
             return false;
           case GameButtonType_Step:
             if (iCol != -1) {
-              pi.m_pPlayer->Step(iCol, -1, input.DeviceI.ts, false, bRelease);
+              pi.m_pPlayer->Step(
+                  iCol, -1, input.DeviceI.ts, false, bRelease, uSensorMask);
             }
             return true;
         }
