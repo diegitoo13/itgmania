@@ -70,7 +70,8 @@ void ScreenMatchmaking::Update(float fDeltaTime) {
   const MatchmakingManager::SearchState state = MATCHMAKING->GetState();
   const bool bSearching =
       state == MatchmakingManager::SearchState_Connecting ||
-      state == MatchmakingManager::SearchState_Queued;
+      state == MatchmakingManager::SearchState_Queued ||
+      state == MatchmakingManager::SearchState_Lobby;
 
   // Waiting loop: starts shortly after entering and re-triggers at a lower
   // volume each pass (RageSound volume is set per Play), so long searches
@@ -105,6 +106,10 @@ void ScreenMatchmaking::Update(float fDeltaTime) {
         ProceedToResumeScreen();
       }
       break;
+    case MatchmakingManager::SearchState_Lobby:
+      // No timeout in the lobby: we idle here until a challenger picks a
+      // chart we own, or the player leaves with START/BACK.
+      break;
     case MatchmakingManager::SearchState_Matched: {
       if (!m_bWindupPlayed) {
         PlayMatchedSounds();
@@ -119,6 +124,11 @@ void ScreenMatchmaking::Update(float fDeltaTime) {
       }
       if (m_fMatchedCountdown == 0.0f) {
         m_fMatchedCountdown = MATCHED_COUNTDOWN_SECONDS;
+        // Lobby matches decide the resume screen when the chart arrives.
+        std::string sResumeScreen = MATCHMAKING->GetResumeScreen();
+        if (!sResumeScreen.empty()) {
+          SetNextScreenName(sResumeScreen);
+        }
       }
       const float fElapsed = MATCHED_COUNTDOWN_SECONDS - m_fMatchedCountdown;
       if (!m_bImpactPlayed && fElapsed >= MATCHED_IMPACT_SECONDS) {
@@ -165,6 +175,13 @@ bool ScreenMatchmaking::Input(const InputEventPlus& input) {
 
   if (input.type != IET_FIRST_PRESS) {
     return ScreenWithMenuElements::Input(input);
+  }
+
+  if (MATCHMAKING->IsInLobby()) {
+    // No song is picked in the lobby; START or BACK leaves it.
+    MATCHMAKING->ExitLobby();
+    Cancel(SM_GoToPrevScreen);
+    return true;
   }
 
   switch (input.MenuI) {

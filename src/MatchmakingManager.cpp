@@ -52,7 +52,7 @@ Preference<std::string> MatchmakingManager::serverUrl(
 Preference<std::string> MatchmakingManager::playerName("MatchmakingName", "");
 
 static const char* SearchStateNames[] = {
-    "Idle", "Connecting", "Queued", "Matched", "Playing",
+    "Idle", "Connecting", "Queued", "Matched", "Playing", "Lobby",
 };
 
 static constexpr int kMaxMainThreadTasksPerUpdate = 16;
@@ -145,7 +145,8 @@ void MatchmakingManager::SetState(SearchState state) {
 
 float MatchmakingManager::GetSearchElapsed() const {
   if (m_SearchState != SearchState_Connecting &&
-      m_SearchState != SearchState_Queued) {
+      m_SearchState != SearchState_Queued &&
+      m_SearchState != SearchState_Lobby) {
     return 0.0f;
   }
   return m_SearchStartTimer.Ago();
@@ -283,6 +284,8 @@ void MatchmakingManager::Connect() {
           SendHello();
           if (m_SearchState == SearchState_Connecting) {
             SendQueue();
+          } else if (m_SearchState == SearchState_Lobby) {
+            SendLobby();
           }
         });
         break;
@@ -496,6 +499,10 @@ void MatchmakingManager::HandleServerMessage(const Json::Value& root) {
     SetState(SearchState_Queued);
   } else if (cmd == "cancelled") {
     LOG->Trace("Matchmaking: queue cancelled by server.");
+  } else if (cmd == "lobby_joined") {
+    LOG->Trace("Matchmaking: in the lobby.");
+  } else if (cmd == "lobby_offer") {
+    HandleLobbyOffer(root);
   } else if (cmd == "matched") {
     HandleMatched(root);
   } else if (cmd == "oj") {
@@ -600,6 +607,25 @@ void MatchmakingManager::HandleMatched(const Json::Value& root) {
 
   LOG->Trace("Matchmaking: matched with '%s' (match %s, role %s).",
              m_sOpponentName.c_str(), m_sMatchId.c_str(), m_sRole.c_str());
+
+  // A lobby match starts from the challenger's chart, not our wheel cursor.
+  if (IsInLobby()) {
+    std::string key = root["chart"].get("key", "").asString();
+    Song* pSong = nullptr;
+    Steps* pSteps = nullptr;
+    if (!FindChartByKey(key, &pSong, &pSteps)) {
+      LOG->Warn("Matchmaking: accepted lobby chart vanished (%s).",
+                key.c_str());
+      ProceedSolo();
+      return;
+    }
+    GAMESTATE->m_pCurSong.Set(pSong);
+    GAMESTATE->m_pCurSteps[m_LocalPlayer].Set(pSteps);
+    if (GAMESTATE->m_PlayMode == PlayMode_Invalid) {
+      GAMESTATE->m_PlayMode.Set(PLAY_MODE_REGULAR);
+    }
+    m_sResumeScreen = "ScreenGameplay";
+  }
 
   PlayerNumber opp = m_LocalPlayer == PLAYER_1 ? PLAYER_2 : PLAYER_1;
 
@@ -741,13 +767,108 @@ void MatchmakingManager::ProceedSolo() {
   SetState(SearchState_Idle);
 }
 
+void MatchmakingManager::SendLobby() {
+  Json::Value root;
+  root["cmd"] = "lobby";
+  SendJson(root);
+  LOG->Trace("Matchmaking: entered the lobby.");
+}
+
+void MatchmakingManager::EnterLobby() {
+  if (m_bInMatch || IsInLobby()) {
+    return;
+  }
+  if (GAMESTATE->GetNumSidesJoined() != 1 || GAMESTATE->IsCourseMode()) {
+    return;
+  }
+  EnsureChartIndex();
+  m_SearchStartTimer.Touch();
+  SetState(SearchState_Lobby);
+  m_LobbyReconnectTimer.Touch();
+  // Reuse the open connection when one is left over from an earlier search
+  // or match (the Open handler only fires on fresh connects).
+  bool bWasConnected = m_bWebSocketRunning;
+  Connect();
+  if (bWasConnected) {
+    SendLobby();
+  }
+}
+
+void MatchmakingManager::ExitLobby() {
+  if (!IsInLobby()) {
+    return;
+  }
+  if (m_bWebSocketRunning) {
+    Json::Value root;
+    root["cmd"] = "lobby_leave";
+    SendJson(root);
+  }
+  SetState(SearchState_Idle);
+  LOG->Trace("Matchmaking: left the lobby.");
+}
+
+void MatchmakingManager::EnsureChartIndex() {
+  if (SONGMAN == nullptr) {
+    return;
+  }
+  int iSongCount = (int)SONGMAN->GetAllSongs().size();
+  if (m_iIndexedSongCount == iSongCount && !m_ChartIndex.empty()) {
+    return;
+  }
+  m_ChartIndex.clear();
+  for (Song* song : SONGMAN->GetAllSongs()) {
+    for (Steps* steps : song->GetAllSteps()) {
+      const std::string& key = steps->GetChartKey();
+      if (!key.empty()) {
+        m_ChartIndex[key] = std::make_pair(song, steps);
+      }
+    }
+  }
+  m_iIndexedSongCount = iSongCount;
+  LOG->Trace("Matchmaking: chart index built (%d charts).",
+             (int)m_ChartIndex.size());
+}
+
+bool MatchmakingManager::FindChartByKey(
+    const std::string& key, Song** songOut, Steps** stepsOut) {
+  EnsureChartIndex();
+  auto it = m_ChartIndex.find(key);
+  if (it == m_ChartIndex.end()) {
+    return false;
+  }
+  *songOut = it->second.first;
+  *stepsOut = it->second.second;
+  return true;
+}
+
+void MatchmakingManager::HandleLobbyOffer(const Json::Value& root) {
+  if (!IsInLobby() || m_bInMatch) {
+    return;
+  }
+  const Json::Value& chart = root["chart"];
+  std::string key = chart.get("key", "").asString();
+  std::string challenger = root["player"].get("name", "?").asString();
+  Song* pSong = nullptr;
+  Steps* pSteps = nullptr;
+  if (!FindChartByKey(key, &pSong, &pSteps)) {
+    LOG->Trace("Matchmaking: lobby offer for a chart we don't have (%s).",
+               key.c_str());
+    return;
+  }
+  LOG->Trace("Matchmaking: accepting lobby challenge from '%s' on '%s'.",
+             challenger.c_str(), pSong->GetDisplayFullTitle().c_str());
+  Json::Value resp;
+  resp["cmd"] = "lobby_accept";
+  resp["key"] = key;
+  SendJson(resp);
+}
+
 void MatchmakingManager::ClearMatchState() {
   m_bInMatch = false;
   FOREACH_PlayerNumber(pn) { m_bNetworkPlayer[pn] = false; }
   m_sMatchId.clear();
   m_sRole.clear();
-  m_sOpponentName.clear();
-  m_sOpponentCountry.clear();
+  m_sOpponentName.clear();  m_sOpponentCountry.clear();
   m_sOpponentIconPath.clear();
   m_OpponentStats = MatchmakingOpponentStats();
   m_RemoteEvents.clear();
@@ -1071,6 +1192,13 @@ void MatchmakingManager::Update() {
     }
   }
 
+  // Lazily reconnect while idling in the lobby after a connection drop.
+  if (m_SearchState == SearchState_Lobby && !m_bWebSocketRunning &&
+      m_LobbyReconnectTimer.Ago() > 5.0f) {
+    m_LobbyReconnectTimer.Touch();
+    Connect();
+  }
+
   if (m_bBotEnabled || m_bBotTwoPlayerGuard) {
     UpdateBotDriver();
   }
@@ -1090,21 +1218,75 @@ void MatchmakingManager::UpdateBotDriver() {
       return;
     }
 
+    // Prefer the stock pack: gimmick charts (combo segments, warps, rolls)
+    // make the per-note judgment stream legitimately diverge from the
+    // engine's weighted local counts, which the E2E asserts on.
     Song* pSong = nullptr;
     Steps* pSteps = nullptr;
-    for (Song* song : SONGMAN->GetAllSongs()) {
-      for (Steps* steps : song->GetAllSteps()) {
-        if (steps->m_StepsType == StepsType_dance_single) {
-          pSong = song;
-          pSteps = steps;
+    for (int pass = 0; pass < 2 && pSteps == nullptr; ++pass) {
+      for (Song* song : SONGMAN->GetAllSongs()) {
+        if (pass == 0 && song->m_sGroupName != "StepMania 5") {
+          continue;
+        }
+        for (Steps* steps : song->GetAllSteps()) {
+          if (steps->m_StepsType == StepsType_dance_single) {
+            pSong = song;
+            pSteps = steps;
+            break;
+          }
+        }
+        if (pSteps != nullptr) {
           break;
         }
       }
-      if (pSteps != nullptr) {
-        break;
-      }
     }
     if (pSteps == nullptr) {
+      return;
+    }
+
+    // Lobby mode (ITG_MM_LOBBY=1): enter the lobby instead of searching; a
+    // challenger queues a chart key we publish to "<result>.key".
+    const char* lobbyEnv = std::getenv("ITG_MM_LOBBY");
+    if (lobbyEnv != nullptr && lobbyEnv[0] == '1') {
+      LOG->Trace("Matchmaking bot: entering the lobby.");
+      if (GAMESTATE->GetNumSidesJoined() == 0) {
+        GAMESTATE->JoinPlayer(PLAYER_1);
+      }
+      if (GAMESTATE->m_pCurGame != nullptr) {
+        const Style* pStyle = GAMEMAN->GetFirstCompatibleStyle(
+            GAMESTATE->m_pCurGame, 1, StepsType_dance_single);
+        if (pStyle != nullptr) {
+          GAMESTATE->SetCurrentStyle(pStyle, PLAYER_1);
+        }
+      }
+      if (GAMESTATE->m_PlayMode == PlayMode_Invalid) {
+        GAMESTATE->m_PlayMode.Set(PLAY_MODE_REGULAR);
+      }
+      PlayerOptions poStage =
+          GAMESTATE->m_pPlayerState[PLAYER_1]->m_PlayerOptions.GetStage();
+      poStage.m_FailType = FailType_Off;
+      GAMESTATE->m_pPlayerState[PLAYER_1]->m_PlayerOptions.Assign(
+          ModsLevel_Stage, poStage);
+      PlayerOptions poPreferred =
+          GAMESTATE->m_pPlayerState[PLAYER_1]->m_PlayerOptions.GetPreferred();
+      poPreferred.m_FailType = FailType_Off;
+      GAMESTATE->m_pPlayerState[PLAYER_1]->m_PlayerOptions.Assign(
+          ModsLevel_Preferred, poPreferred);
+      m_LocalPlayer = PLAYER_1;
+      EnterLobby();
+      const char* resultPath = std::getenv("ITG_MM_RESULT");
+      std::string path =
+          resultPath != nullptr && resultPath[0] != '\0' ? resultPath
+                                                         : "/tmp/itg_mm_result.txt";
+      std::ofstream keyFile(path + ".key", std::ios::out | std::ios::trunc);
+      if (!m_ChartIndex.empty()) {
+        keyFile << m_ChartIndex.begin()->first << "\n";
+      }
+      keyFile.flush();
+      keyFile.close();
+      SCREENMAN->SetNewScreen("ScreenMatchmaking");
+      m_bBotStarted = true;
+      m_BotTimer.Touch();
       return;
     }
 

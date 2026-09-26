@@ -25,6 +25,7 @@
 #include "LocalizedString.h"
 #include "LuaManager.h"
 #include "MenuTimer.h"
+#include "MatchmakingManager.h"
 #include "MessageManager.h"
 #include "ModsGroup.h"
 #include "OptionsList.h"
@@ -487,6 +488,19 @@ bool ScreenSelectMusic::Input(const InputEventPlus& input) {
     PREFSMAN->m_bShowNativeLanguage.Set(!PREFSMAN->m_bShowNativeLanguage);
     MESSAGEMAN->Broadcast("DisplayLanguageChanged");
     m_MusicWheel.RebuildWheelItems();
+    return true;
+  }
+
+  // Matchmaking lobby: a mappable custom button (Key/Joy Mappings ->
+  // Custom01) enters the lobby while exactly one side is joined.
+  if (input.type == IET_FIRST_PRESS && input.MenuI == GAME_BUTTON_CUSTOM_01 &&
+      MATCHMAKING != nullptr && !MATCHMAKING->IsInMatch() &&
+      GAMESTATE->GetNumSidesJoined() == 1 && !GAMESTATE->IsCourseMode() &&
+      !IsTransitioning() && m_SelectionState != SelectionState_Finalized) {
+    MATCHMAKING->EnterLobby();
+    if (MATCHMAKING->IsInLobby()) {
+      SCREENMAN->SetNewScreen("ScreenMatchmaking");
+    }
     return true;
   }
 

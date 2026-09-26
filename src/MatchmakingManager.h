@@ -18,6 +18,8 @@
 #include "RageTimer.h"
 
 struct lua_State;
+class Song;
+class Steps;
 namespace Json {
 class Value;
 }
@@ -61,6 +63,7 @@ class MatchmakingManager {
     SearchState_Queued,
     SearchState_Matched,
     SearchState_Playing,
+    SearchState_Lobby,  // idle in the lobby, waiting for a challenger's chart
   };
 
   void Update();
@@ -76,6 +79,11 @@ class MatchmakingManager {
   void CancelSearch();
   std::string GetResumeScreen() const { return m_sResumeScreen; }
   void BeginPlaying();
+
+  // Lobby: idle on the wheel side until someone queues a chart we own.
+  void EnterLobby();
+  void ExitLobby();
+  bool IsInLobby() const { return m_SearchState == SearchState_Lobby; }
 
   SearchState GetState() const { return m_SearchState; }
   std::string GetStateString() const;
@@ -116,9 +124,11 @@ class MatchmakingManager {
   void SendThreadMain();
   void SendHello();
   void SendQueue();
+  void SendLobby();
   void SendResult();
   void HandleServerMessage(const Json::Value& root);
   void HandleMatched(const Json::Value& root);
+  void HandleLobbyOffer(const Json::Value& root);
   void ApplyOpponentMods(PlayerNumber pn, const std::string& mods);
   void HandleOpponentGone();
   void ProceedSolo();
@@ -176,6 +186,15 @@ class MatchmakingManager {
   RageTimer m_LastJudgmentFlush;
   // Set when a search starts; backs GetSearchElapsed().
   RageTimer m_SearchStartTimer;
+  // Lobby: chart key -> (Song, Steps) so we can tell instantly whether we
+  // own an offered chart. Rebuilt when the song library size changes.
+  std::map<std::string, std::pair<Song*, Steps*>> m_ChartIndex;
+  int m_iIndexedSongCount = -1;
+  void EnsureChartIndex();
+  bool FindChartByKey(
+      const std::string& key, Song** songOut, Steps** stepsOut);
+  // Last time we (re)connected while in the lobby, for lazy reconnects.
+  RageTimer m_LobbyReconnectTimer;
   // Last time we heard anything from the server (message or pong); main
   // thread only. Used to detect a silently dead connection mid-song.
   RageTimer m_LastInboundActivity;

@@ -191,6 +191,7 @@ end
 -- ---------------------------------------------------------------- actors
 
 local elapsed = 0
+local last_state = nil
 local found_start = nil
 local found_triggered = false
 local opp_base_x = SCREEN_CENTER_X * 0.55
@@ -492,11 +493,23 @@ local function Update(self, dt)
 
 	if not found_triggered then
 		local waiting = self:GetChild("Waiting")
+		local state = MATCHMAKING:GetState()
+		if state ~= last_state then
+			last_state = state
+			if state == "Lobby" then
+				waiting:GetChild("Title"):settext("IN THE LOBBY")
+				waiting:GetChild("Hint"):settext(
+					"waiting for a challenger with a song you own — START/BACK: leave")
+			else
+				waiting:GetChild("Title"):settext("SEARCHING FOR A MATCH")
+				waiting:GetChild("Hint"):settext("START: play solo    BACK: cancel")
+			end
+		end
 		waiting:GetChild("Title"):diffusealpha(0.6 + 0.4 * math.sin(elapsed * 4))
 		local e = MATCHMAKING:GetSearchElapsed()
 		waiting:GetChild("Timer"):settext(
 			string.format("%d:%02d", math.floor(e / 60), math.floor(e % 60)))
-		if MATCHMAKING:GetState() == "Matched" then
+		if state == "Matched" then
 			StartFound(self, nil)
 		end
 		return
