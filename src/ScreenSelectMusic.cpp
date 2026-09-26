@@ -491,9 +491,9 @@ bool ScreenSelectMusic::Input(const InputEventPlus& input) {
     return true;
   }
 
-  // Matchmaking lobby: a mappable custom button (Key/Joy Mappings ->
-  // Custom01) enters the lobby while exactly one side is joined.
-  if (input.type == IET_FIRST_PRESS && input.MenuI == GAME_BUTTON_CUSTOM_01 &&
+  // Matchmaking lobby: the mappable "Restart" button (unused on the wheel)
+  // enters the lobby while exactly one side is joined.
+  if (input.type == IET_FIRST_PRESS && input.MenuI == GAME_BUTTON_RESTART &&
       MATCHMAKING != nullptr && !MATCHMAKING->IsInMatch() &&
       GAMESTATE->GetNumSidesJoined() == 1 && !GAMESTATE->IsCourseMode() &&
       !IsTransitioning() && m_SelectionState != SelectionState_Finalized) {
