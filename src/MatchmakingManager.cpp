@@ -781,6 +781,8 @@ void MatchmakingManager::EnterLobby() {
   if (GAMESTATE->GetNumSidesJoined() != 1 || GAMESTATE->IsCourseMode()) {
     return;
   }
+  // Kicks off the cooperative index build if the library changed; on big
+  // libraries this finishes over the next frames/seconds, never blocking.
   EnsureChartIndex();
   m_SearchStartTimer.Touch();
   SetState(SearchState_Lobby);
@@ -807,16 +809,32 @@ void MatchmakingManager::ExitLobby() {
   LOG->Trace("Matchmaking: left the lobby.");
 }
 
-void MatchmakingManager::EnsureChartIndex() {
-  if (SONGMAN == nullptr) {
+bool MatchmakingManager::EnsureChartIndex() {
+  if (m_bChartIndexReady &&
+      m_iIndexedSongCount == (int)SONGMAN->GetAllSongs().size()) {
+    return true;
+  }
+  if (!m_bChartIndexBuilding) {
+    m_ChartIndex.clear();
+    m_IndexWorkSongs.assign(
+        SONGMAN->GetAllSongs().begin(), SONGMAN->GetAllSongs().end());
+    m_IndexSongPos = 0;
+    m_bChartIndexBuilding = true;
+    m_bChartIndexReady = false;
+  }
+  return false;
+}
+
+void MatchmakingManager::ProcessChartIndexBuild() {
+  if (!m_bChartIndexBuilding) {
     return;
   }
-  int iSongCount = (int)SONGMAN->GetAllSongs().size();
-  if (m_iIndexedSongCount == iSongCount && !m_ChartIndex.empty()) {
-    return;
-  }
-  m_ChartIndex.clear();
-  for (Song* song : SONGMAN->GetAllSongs()) {
+  // Time-slice the hashing: each chart's key costs a decompress+hash+
+  // compress, so on large libraries a synchronous build would hang the
+  // game. A small budget per frame keeps the lobby responsive.
+  RageTimer slice;
+  while (m_IndexSongPos < m_IndexWorkSongs.size() && slice.Ago() < 0.002f) {
+    Song* song = m_IndexWorkSongs[m_IndexSongPos++];
     for (Steps* steps : song->GetAllSteps()) {
       const std::string& key = steps->GetChartKey();
       if (!key.empty()) {
@@ -824,14 +842,35 @@ void MatchmakingManager::EnsureChartIndex() {
       }
     }
   }
-  m_iIndexedSongCount = iSongCount;
-  LOG->Trace("Matchmaking: chart index built (%d charts).",
-             (int)m_ChartIndex.size());
+  if (m_IndexSongPos >= m_IndexWorkSongs.size()) {
+    m_bChartIndexBuilding = false;
+    m_bChartIndexReady = true;
+    m_iIndexedSongCount = (int)m_IndexWorkSongs.size();
+    m_IndexWorkSongs.clear();
+    LOG->Trace("Matchmaking: chart index built (%d charts).",
+               (int)m_ChartIndex.size());
+    // Answer an offer that arrived while we were still indexing.
+    if (!m_sPendingLobbyOfferKey.empty()) {
+      std::string key = m_sPendingLobbyOfferKey;
+      m_sPendingLobbyOfferKey.clear();
+      Song* pSong = nullptr;
+      Steps* pSteps = nullptr;
+      if (IsInLobby() && !m_bInMatch &&
+          FindChartByKey(key, &pSong, &pSteps)) {
+        Json::Value resp;
+        resp["cmd"] = "lobby_accept";
+        resp["key"] = key;
+        SendJson(resp);
+      }
+    }
+  }
 }
 
 bool MatchmakingManager::FindChartByKey(
     const std::string& key, Song** songOut, Steps** stepsOut) {
-  EnsureChartIndex();
+  if (!EnsureChartIndex()) {
+    return false;
+  }
   auto it = m_ChartIndex.find(key);
   if (it == m_ChartIndex.end()) {
     return false;
@@ -851,6 +890,11 @@ void MatchmakingManager::HandleLobbyOffer(const Json::Value& root) {
   Song* pSong = nullptr;
   Steps* pSteps = nullptr;
   if (!FindChartByKey(key, &pSong, &pSteps)) {
+    if (m_bChartIndexBuilding) {
+      // Index not ready yet (large library); answer when it completes if
+      // the waiter is still queued.
+      m_sPendingLobbyOfferKey = key;
+    }
     LOG->Trace("Matchmaking: lobby offer for a chart we don't have (%s).",
                key.c_str());
     return;
@@ -1199,6 +1243,8 @@ void MatchmakingManager::Update() {
     Connect();
   }
 
+  ProcessChartIndexBuild();
+
   if (m_bBotEnabled || m_bBotTwoPlayerGuard) {
     UpdateBotDriver();
   }
@@ -1248,6 +1294,7 @@ void MatchmakingManager::UpdateBotDriver() {
     // challenger queues a chart key we publish to "<result>.key".
     const char* lobbyEnv = std::getenv("ITG_MM_LOBBY");
     if (lobbyEnv != nullptr && lobbyEnv[0] == '1') {
+      m_bBotLobbyMode = true;
       LOG->Trace("Matchmaking bot: entering the lobby.");
       if (GAMESTATE->GetNumSidesJoined() == 0) {
         GAMESTATE->JoinPlayer(PLAYER_1);
@@ -1274,16 +1321,6 @@ void MatchmakingManager::UpdateBotDriver() {
           ModsLevel_Preferred, poPreferred);
       m_LocalPlayer = PLAYER_1;
       EnterLobby();
-      const char* resultPath = std::getenv("ITG_MM_RESULT");
-      std::string path =
-          resultPath != nullptr && resultPath[0] != '\0' ? resultPath
-                                                         : "/tmp/itg_mm_result.txt";
-      std::ofstream keyFile(path + ".key", std::ios::out | std::ios::trunc);
-      if (!m_ChartIndex.empty()) {
-        keyFile << m_ChartIndex.begin()->first << "\n";
-      }
-      keyFile.flush();
-      keyFile.close();
       SCREENMAN->SetNewScreen("ScreenMatchmaking");
       m_bBotStarted = true;
       m_BotTimer.Touch();
@@ -1360,6 +1397,21 @@ void MatchmakingManager::UpdateBotDriver() {
 
   Screen* pScreen = SCREENMAN->GetTopScreen();
   std::string screenName = pScreen != nullptr ? pScreen->GetName() : "";
+
+  // Lobby mode: publish a chart key we own once the index is ready (on a
+  // big library the cooperative build takes a moment).
+  if (m_bBotLobbyMode && m_iBotPhase == 0 && !m_bBotKeyPublished &&
+      m_bChartIndexReady && !m_ChartIndex.empty()) {
+    const char* resultPath = std::getenv("ITG_MM_RESULT");
+    std::string path =
+        resultPath != nullptr && resultPath[0] != '\0' ? resultPath
+                                                       : "/tmp/itg_mm_result.txt";
+    std::ofstream keyFile(path + ".key", std::ios::out | std::ios::trunc);
+    keyFile << m_ChartIndex.begin()->first << "\n";
+    keyFile.flush();
+    keyFile.close();
+    m_bBotKeyPublished = true;
+  }
 
   // Phase 1: the match is over and we sent the player back to the music
   // wheel. The Update() screen watch must have torn the match down: the

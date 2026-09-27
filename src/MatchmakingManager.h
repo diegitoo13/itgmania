@@ -187,10 +187,21 @@ class MatchmakingManager {
   // Set when a search starts; backs GetSearchElapsed().
   RageTimer m_SearchStartTimer;
   // Lobby: chart key -> (Song, Steps) so we can tell instantly whether we
-  // own an offered chart. Rebuilt when the song library size changes.
+  // own an offered chart. Built cooperatively in small time slices per
+  // frame (hashing a chart does decompress+hash+compress, which is too
+  // slow to do synchronously on large libraries); rebuilt when the song
+  // library size changes.
   std::map<std::string, std::pair<Song*, Steps*>> m_ChartIndex;
+  bool EnsureChartIndex();
+  void ProcessChartIndexBuild();
+  bool m_bChartIndexBuilding = false;
+  bool m_bChartIndexReady = false;
   int m_iIndexedSongCount = -1;
-  void EnsureChartIndex();
+  std::vector<Song*> m_IndexWorkSongs;
+  size_t m_IndexSongPos = 0;
+  // An offer that arrived while the index was building, answered on
+  // completion if the waiter is still queued.
+  std::string m_sPendingLobbyOfferKey;
   bool FindChartByKey(
       const std::string& key, Song** songOut, Steps** stepsOut);
   // Last time we (re)connected while in the lobby, for lazy reconnects.
@@ -211,6 +222,8 @@ class MatchmakingManager {
   bool m_bBotTwoPlayerGuard = false;
   int m_iBotPhase = 0;  // 0 = play, 1 = returning to the wheel after a match
   RageTimer m_BotPhaseTimer;
+  bool m_bBotLobbyMode = false;
+  bool m_bBotKeyPublished = false;
   void BotWriteResultFile(const std::string& text, bool append);
 };
 
