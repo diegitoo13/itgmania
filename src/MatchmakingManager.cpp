@@ -503,6 +503,12 @@ void MatchmakingManager::HandleServerMessage(const Json::Value& root) {
     LOG->Trace("Matchmaking: in the lobby.");
   } else if (cmd == "lobby_offer") {
     HandleLobbyOffer(root);
+  } else if (cmd == "lobby_declined") {
+    // A lobby player doesn't own our chart; visible in logs so a missed
+    // pairing is never a mystery.
+    LOG->Trace("Matchmaking: '%s' in the lobby doesn't have this chart (%s).",
+               root["player"].get("name", "?").asString().c_str(),
+               root.get("reason", "?").asString().c_str());
   } else if (cmd == "matched") {
     HandleMatched(root);
   } else if (cmd == "oj") {
@@ -894,9 +900,15 @@ void MatchmakingManager::HandleLobbyOffer(const Json::Value& root) {
       // Index not ready yet (large library); answer when it completes if
       // the waiter is still queued.
       m_sPendingLobbyOfferKey = key;
+      return;
     }
     LOG->Trace("Matchmaking: lobby offer for a chart we don't have (%s).",
                key.c_str());
+    Json::Value decline;
+    decline["cmd"] = "lobby_decline";
+    decline["key"] = key;
+    decline["reason"] = "missing";
+    SendJson(decline);
     return;
   }
   LOG->Trace("Matchmaking: accepting lobby challenge from '%s' on '%s'.",
