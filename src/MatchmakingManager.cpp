@@ -902,13 +902,9 @@ void MatchmakingManager::HandleLobbyOffer(const Json::Value& root) {
       m_sPendingLobbyOfferKey = key;
       return;
     }
+    // Don't have it — stay silent; someone else in the lobby may own it.
     LOG->Trace("Matchmaking: lobby offer for a chart we don't have (%s).",
                key.c_str());
-    Json::Value decline;
-    decline["cmd"] = "lobby_decline";
-    decline["key"] = key;
-    decline["reason"] = "missing";
-    SendJson(decline);
     return;
   }
   LOG->Trace("Matchmaking: accepting lobby challenge from '%s' on '%s'.",
