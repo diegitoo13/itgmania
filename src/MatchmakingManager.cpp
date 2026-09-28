@@ -1277,16 +1277,23 @@ void MatchmakingManager::UpdateBotDriver() {
     // engine's weighted local counts, which the E2E asserts on.
     Song* pSong = nullptr;
     Steps* pSteps = nullptr;
+    const char* songIndexEnv = std::getenv("ITG_MM_SONG_INDEX");
+    int iWantedSong = songIndexEnv != nullptr ? atoi(songIndexEnv) : 0;
+    int iSongOrdinal = 0;
     for (int pass = 0; pass < 2 && pSteps == nullptr; ++pass) {
       for (Song* song : SONGMAN->GetAllSongs()) {
         if (pass == 0 && song->m_sGroupName != "StepMania 5") {
           continue;
         }
+        bool bHasDanceSingle = false;
         for (Steps* steps : song->GetAllSteps()) {
           if (steps->m_StepsType == StepsType_dance_single) {
-            pSong = song;
-            pSteps = steps;
-            break;
+            bHasDanceSingle = true;
+            if (iSongOrdinal++ == iWantedSong) {
+              pSong = song;
+              pSteps = steps;
+              break;
+            }
           }
         }
         if (pSteps != nullptr) {
