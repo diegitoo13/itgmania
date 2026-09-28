@@ -88,6 +88,8 @@ class MatchmakingManager {
   SearchState GetState() const { return m_SearchState; }
   std::string GetStateString() const;
   float GetSearchElapsed() const;
+  // True while the lobby chart index is still being built cooperatively.
+  bool IsIndexingCharts() const { return m_bChartIndexBuilding; }
   bool IsInMatch() const { return m_bInMatch; }
   bool IsNetworkPlayer(PlayerNumber pn) const;
   bool IsBotLocalPlayer(PlayerNumber pn) const;

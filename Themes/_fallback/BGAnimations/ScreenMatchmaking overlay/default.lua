@@ -192,6 +192,7 @@ end
 
 local elapsed = 0
 local last_state = nil
+local last_indexing = nil
 local found_start = nil
 local found_triggered = false
 local opp_base_x = SCREEN_CENTER_X * 0.55
@@ -500,9 +501,23 @@ local function Update(self, dt)
 				waiting:GetChild("Title"):settext("IN THE LOBBY")
 				waiting:GetChild("Hint"):settext(
 					"waiting for a challenger with a song you own — START/BACK: leave")
+				last_indexing = nil
 			else
 				waiting:GetChild("Title"):settext("SEARCHING FOR A MATCH")
 				waiting:GetChild("Hint"):settext("START: play solo    BACK: cancel")
+			end
+		end
+		if state == "Lobby" then
+			local indexing = MATCHMAKING:IsIndexingCharts()
+			if indexing ~= last_indexing then
+				last_indexing = indexing
+				if indexing then
+					waiting:GetChild("Hint"):settext(
+						"indexing your library — challengers get through in a moment…")
+				else
+					waiting:GetChild("Hint"):settext(
+						"waiting for a challenger with a song you own — START/BACK: leave")
+				end
 			end
 		end
 		waiting:GetChild("Title"):diffusealpha(0.6 + 0.4 * math.sin(elapsed * 4))

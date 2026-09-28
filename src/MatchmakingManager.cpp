@@ -1563,6 +1563,11 @@ class LunaMatchmakingManager : public Luna<MatchmakingManager> {
     return 1;
   }
 
+  static int IsIndexingCharts(T* p, lua_State* L) {
+    lua_pushboolean(L, p->IsIndexingCharts());
+    return 1;
+  }
+
   static int IsInMatch(T* p, lua_State* L) {
     lua_pushboolean(L, p->IsInMatch());
     return 1;
@@ -1645,6 +1650,7 @@ class LunaMatchmakingManager : public Luna<MatchmakingManager> {
     ADD_METHOD(SetSearchEnabled);
     ADD_METHOD(GetState);
     ADD_METHOD(GetSearchElapsed);
+    ADD_METHOD(IsIndexingCharts);
     ADD_METHOD(IsInMatch);
     ADD_METHOD(IsNetworkPlayer);
     ADD_METHOD(GetOpponentName);
