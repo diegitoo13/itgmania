@@ -39,7 +39,7 @@ static void GetMemoryDebugInfo() {
   }
 }
 
-static void GetDisplayDriverDebugInfo() {
+static void GetDisplayDriverDebugInfoImpl() {
   std::string sPrimaryDeviceName = GetPrimaryVideoName();
 
   if (sPrimaryDeviceName == "") {
@@ -75,6 +75,18 @@ static void GetDisplayDriverDebugInfo() {
 
       LogVideoDriverInfo(info);
     }
+  }
+}
+
+static void GetDisplayDriverDebugInfo() {
+  /* Defensive: this enumerates display devices and display-class registry
+   * keys purely for startup logging. A fault here (seen once: transient
+   * system state during display changes) would otherwise crash the game
+   * before it opens a window; log and continue instead. */
+  __try {
+    GetDisplayDriverDebugInfoImpl();
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    LOG->Warn("Display driver info collection crashed; skipped.");
   }
 }
 
